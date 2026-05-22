@@ -129,6 +129,7 @@ def create_app(cfg: Config) -> Flask:
             preroll_ms=cfg.get("client.preroll_ms", 450),
             audio_chunk_ms=cfg.get("client.audio_chunk_ms", 80),
             sample_rate=cfg.get("stt.sample_rate", 16000),
+            tts_playback_gap_ms=cfg.get("tts.playback_gap_ms", 120),
         )
 
 

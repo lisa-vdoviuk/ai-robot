@@ -465,16 +465,28 @@ function playNext() {
     if (active) setTalking('listening', 'ok');
     return;
   }
+
   playing = true;
+
   const buffer = audioQueue.shift();
   const src = playbackContext.createBufferSource();
+
   src.buffer = buffer;
   src.connect(playbackContext.destination);
   currentSource = src;
+
   src.onended = () => {
     if (currentSource === src) currentSource = null;
-    playNext();
+
+    const gapMs = Number(cfg.ttsPlaybackGapMs ?? 120);
+
+    if (gapMs > 0 && audioQueue.length) {
+      setTimeout(playNext, gapMs);
+    } else {
+      playNext();
+    }
   };
+
   src.start();
 }
 

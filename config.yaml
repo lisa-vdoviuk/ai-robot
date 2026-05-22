@@ -11,16 +11,15 @@ server:
 assistant:
   name: "Orion"
   language: "en"
-  max_history_turns: 8
-  # Turn this on only while debugging. False is faster because the model does not
-  # need to generate XML rationale before the spoken answer.
+  max_history_turns: 4
   visible_rationale: false
   system_prompt: |
     You are Orion, a local voice-first AI companion running on a Raspberry Pi.
     Speak English only.
 
     Be a smart, natural conversational partner: helpful, calm, concise, and context-aware.
-    Keep spoken answers short: usually 1-3 sentences, unless the user asks for detail.
+    Keep spoken answers very short: usually 1-2 sentences.
+    Use natural punctuation. Put a period after each sentence.
     The user transcript comes from speech recognition and may contain errors. If the text is too short,
     garbled, or ambiguous, ask a brief clarification instead of pretending you understood.
 
@@ -43,17 +42,26 @@ stt:
 
 llm:
   engine: "llama_cpp"
-  # Quality default: 3B Q4_K_M. For faster responses on a hot/throttled Pi, use the 1.5B profile in README.
-  model_path: "models/llm/qwen2.5-3b-instruct-q4_k_m.gguf"
+  model_path: "models/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf"
   chat_format: "chatml"
-  n_ctx: 1536
-  n_threads: 4
-  n_batch: 256
+
+  # Менший контекст = менше RAM і швидший prompt prefill.
+  n_ctx: 1024
+
+  # 3 потоки замість 4: трохи повільніше за absolute max,
+  # але Raspberry Pi залишається живішою для camera, TTS, web UI.
+  n_threads: 3
+  n_batch: 128
   n_gpu_layers: 0
-  temperature: 0.35
-  top_p: 0.9
-  repeat_penalty: 1.08
-  max_tokens: 140
+
+  temperature: 0.25
+  top_p: 0.85
+  repeat_penalty: 1.05
+
+  # Дуже важливо для голосового робота.
+  # Довгі відповіді звучать круто в чаті, але в роботі створюють latency.
+  max_tokens: 90
+
   stop:
     - "<|im_end|>"
 
@@ -65,68 +73,63 @@ quality_guard:
 
 tts:
   engine: "piper"
-  # Leave as "piper" if installed through pip. You can also put an absolute path.
   piper_bin: "piper"
-  # More pleasant default voice profile downloaded by scripts/download_models.py --tts amy-high.
-  # If you keep the old Ryan voice, set these back to en_US-ryan-high.
-  model_path: "models/piper/en_US-amy-medium.onnx"
-  config_path: "models/piper/en_US-amy-medium.onnx.json"
+
+  model_path: "models/piper/en_US-lessac-medium.onnx"
+  config_path: "models/piper/en_US-lessac-medium.onnx.json"
+
   speaker_id: null
-  # Slightly slower than 1.0 usually sounds less rushed.
-  length_scale: 1.08
-  # Optional Piper controls. These are conservative; change only if the voice sounds unstable.
-  noise_scale: 0.55
-  noise_w: 0.75
-  sentence_silence: 0.08
+
+  # Більше значення = повільніше і природніше.
+  length_scale: 1.12
+
+  # Трохи стабільніша, менш "нервова" інтонація.
+  noise_scale: 0.45
+  noise_w: 0.55
+
+  # Було 0.08 — майже без пауз.
+  sentence_silence: 0.28
+
   normalize_text: true
-  # Larger chunks reduce audible gaps between generated WAVs.
-  sentence_min_chars: 42
-  sentence_max_chars: 260
-  coalesce_wait_s: 0.18
-  chunk_max_chars: 320
-  join_timeout_s: 120
+
+  # Менші chunks = швидше починає говорити.
+  sentence_min_chars: 28
+  sentence_max_chars: 180
+  coalesce_wait_s: 0.08
+  chunk_max_chars: 220
+
+  # Це ми додамо у frontend нижче.
+  playback_gap_ms: 120
+
+  join_timeout_s: 90
 
 logging:
   jsonl_path: "logs/voicepi.jsonl"
   console: true
 
 memory:
-  # Local long-term memory: user profile facts, episodic recall, and rolling summaries.
-  # Stored in a local SQLite file so reads stay sub-millisecond and the robot works offline.
   enabled: true
   db_path: "logs/memory.sqlite"
   user_id: "default"
-  # Inject a compact [USER MEMORY] block into the prompt before the user's message.
   attach_to_prompt: true
-  # How many durable facts (name, likes, etc.) to include in that block.
-  max_facts: 8
-  # How many keyword/semantically relevant past exchanges to recall per turn.
-  recall_k: 3
-  # Cheap, no-LLM extraction of durable facts (English + Ukrainian) from each user message.
+
+  max_facts: 5
+  recall_k: 2
+
   extract_facts: true
-  # Keep the DB bounded on a small device; oldest episodes beyond this are pruned.
   max_episodes: 2000
 
-  # Optional semantic recall. Without this, recall uses fast FTS5 keyword search.
-  # With it, past episodes are also re-ranked by cosine similarity of embeddings,
-  # so the robot can recall by meaning, not just matching words.
   embeddings:
     enabled: false
-    # A small GGUF embedding model. Download e.g. nomic-embed-text or bge-small-en
-    # and point here. Leave disabled until the model file is present.
     model_path: "models/embed/nomic-embed-text-v1.5.Q4_K_M.gguf"
     n_ctx: 512
-    n_threads: 4
+    n_threads: 3
 
-  # Rolling summarization: when the chat gets long, fold old turns into a short
-  # stored summary (runs in the background, off the live reply path).
   summary:
     enabled: true
-    # Summarize once the live history reaches this many exchanges.
-    trigger_turns: 12
-    # How many recent exchanges to keep verbatim after summarizing.
-    keep_recent_turns: 6
-    max_tokens: 160
+    trigger_turns: 10
+    keep_recent_turns: 4
+    max_tokens: 120
 
 camera:
   # Uses Picamera2 and serves /camera/stream.mjpg plus /camera/snapshot.jpg.
@@ -135,22 +138,27 @@ camera:
   height: 480
 
 vision:
-  # Basic local computer vision: scene awareness from camera frames.
-  # Object detection uses OpenCV DNN + MobileNet-SSD when models/vision files are present.
-  # Motion detection works with OpenCV only and does not need extra model files.
   enabled: true
-  poll_interval_s: 2.0
+
+  # Менше background CPU.
+  poll_interval_s: 4.0
+
+  # Не аналізувати кадр на кожен звичайний turn.
+  # Vision все одно працюватиме:
+  # - через кнопку Analyze current frame
+  # - коли питання схоже на "what do you see?"
   snapshot_on_turn: true
-  always_attach_to_prompt: true
-  max_prompt_age_s: 3.0
-  # Keep poll observations out of the server console; manual/turn/error observations are still logged.
+  always_attach_to_prompt: false
+  max_prompt_age_s: 8.0
+
   log_poll_observations: false
-  # A known object occupying this much of the frame is treated as a possible close obstacle.
   obstacle_area_ratio: 0.10
+
   motion:
     enabled: true
     threshold: 24
     min_area_ratio: 0.01
+
   object_detection:
     enabled: true
     model_path: "models/vision/mobilenet_iter_73000.caffemodel"

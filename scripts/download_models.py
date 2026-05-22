@@ -59,6 +59,18 @@ PIPER_PROFILES = {
         "en/en_US/amy/medium/en_US-amy-medium.onnx",
         "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
     ),
+        "lessac-medium": (
+        "en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+        "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+    ),
+    "lessac-high": (
+        "en/en_US/lessac/high/en_US-lessac-high.onnx",
+        "en/en_US/lessac/high/en_US-lessac-high.onnx.json",
+    ),
+    "ukrainian-medium": (
+        "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
+        "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json",
+    ),
 }
 
 VISION_PROFILES = {
