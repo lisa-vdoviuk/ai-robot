@@ -157,6 +157,66 @@ Do not invent robot actions that are not listed in the tool result.
             text = str(result)
         return _parse_first_json_object(text)
 
+    def summarize(
+        self,
+        turns: list[dict[str, str]],
+        previous_summary: str = "",
+        max_tokens: int = 160,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        """Condense old conversation turns into a short running memory summary.
+
+        Used by the rolling-summary memory feature. Runs as a single non-streaming
+        completion. It shares the model lock with normal generation, so callers
+        should invoke it off the live turn (e.g. on a background thread when idle).
+        """
+        if not turns:
+            return previous_summary
+        convo_lines: list[str] = []
+        for msg in turns:
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            content = str(msg.get("content", "")).replace("\n", " ").strip()
+            if content:
+                convo_lines.append(f"{role}: {content}")
+        if not convo_lines:
+            return previous_summary
+
+        system = (
+            "You compress a voice assistant's conversation into a compact running memory. "
+            "Write 2-4 short sentences capturing durable, useful facts: who the user is, "
+            "their stated preferences, ongoing goals, and any commitments. "
+            "Do not include greetings, small talk, or one-off pleasantries. Plain text only."
+        )
+        user_payload = ""
+        if previous_summary:
+            user_payload += f"Existing memory summary:\n{previous_summary}\n\n"
+        user_payload += "New conversation to fold in:\n" + "\n".join(convo_lines)
+
+        params: dict[str, Any] = {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_payload},
+            ],
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": int(max_tokens),
+            "stream": False,
+        }
+        stop = self.cfg.get("llm.stop", None)
+        if stop:
+            params["stop"] = stop
+
+        with self.lock:
+            if cancel_event is not None and cancel_event.is_set():
+                return previous_summary
+            result = self.llm.create_chat_completion(**params)
+        try:
+            text = result["choices"][0]["message"].get("content", "")
+        except Exception:
+            text = ""
+        text = (text or "").strip()
+        return text or previous_summary
+
     def stream_chat(
         self,
         messages: list[dict[str, str]],

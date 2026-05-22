@@ -83,3 +83,23 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-
 h3 { margin: 14px 0 8px; font-size: 14px; color: var(--muted); }
 .visionBox { min-height: 86px; max-height: 180px; overflow: auto; padding: 12px; background: #0c0f15; border-radius: 14px; border: 1px solid var(--border); }
 .visionBox.small { min-height: 70px; max-height: 160px; color: #c8d1e8; }
+
+/* Raspberry Pi system telemetry panel */
+.system { grid-column: 1; }
+.sysGrid { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+.sysMetric { display: flex; flex-direction: column; gap: 6px; }
+.sysMetricHead { display: flex; justify-content: space-between; align-items: baseline; }
+.sysLabel { color: var(--muted); font-size: 13px; }
+.sysVal { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 15px; color: var(--text); }
+.sysBar { height: 10px; background: #0c0f15; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.sysBarFill { height: 100%; width: 0%; border-radius: 999px; background: var(--ok); transition: width .4s ease, background .3s ease; }
+.sysMetric.ok .sysVal { color: var(--ok); }
+.sysMetric.ok .sysBarFill { background: var(--ok); }
+.sysMetric.warn .sysVal { color: var(--warn); }
+.sysMetric.warn .sysBarFill { background: var(--warn); }
+.sysMetric.critical .sysVal { color: var(--danger); }
+.sysMetric.critical .sysBarFill { background: var(--danger); }
+.sysMetric.critical { animation: sysPulse 1.2s ease-in-out infinite; }
+.sysMetric.unknown .sysVal { color: var(--muted); }
+@keyframes sysPulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+#sysExtra { margin-top: 14px; margin-bottom: 0; font-variant-numeric: tabular-nums; }

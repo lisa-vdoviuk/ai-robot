@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import Any
 
+from .memory import MemoryStore, extract_facts
 from .robot_controller import RobotCommand, RobotController
 from .stt_vosk import VoskStreamSTT
 from .text_utils import (
@@ -24,7 +25,7 @@ _RESERVED_LOG_KEYS = {"source", "level", "message", "sid", "ts", "iso"}
 
 
 class ConversationSession:
-    def __init__(self, sid: str, socketio, cfg, logger, llm_engine, tts_engine, robot_controller: RobotController | None = None, vision_service=None) -> None:
+    def __init__(self, sid: str, socketio, cfg, logger, llm_engine, tts_engine, robot_controller: RobotController | None = None, vision_service=None, memory_store: "MemoryStore | None" = None) -> None:
         self.sid = sid
         self.socketio = socketio
         self.cfg = cfg
@@ -33,6 +34,11 @@ class ConversationSession:
         self.tts_engine = tts_engine
         self.robot_controller = robot_controller or RobotController(cfg)
         self.vision_service = vision_service
+        self.memory_store = memory_store
+        # A stable id for this user. With a single owner it's "default"; a multi-user
+        # build (e.g. after face recognition) can set this per recognized person.
+        self.user_id = str(cfg.get("memory.user_id", "default"))
+        self._summarizing = False
         self.history: list[dict[str, str]] = []
         self.cancel_event = threading.Event()
         self.turn_thread: threading.Thread | None = None
@@ -228,6 +234,9 @@ class ConversationSession:
 
         robot_context = self._plan_and_execute_robot(planner_text, cancel_event)
         guarded_text = self._maybe_guard_user_text(user_text)
+        memory_context = self._memory_context(user_text)
+        if memory_context:
+            guarded_text = f"{memory_context}\n\n{guarded_text}"
         if vision_context:
             guarded_text = f"{guarded_text}\n\n[CAMERA OBSERVATION]\n{vision_context}"
         if robot_context:
@@ -325,6 +334,7 @@ class ConversationSession:
             return
 
         self.history.append({"role": "assistant", "content": answer})
+        self._remember_turn(user_text, answer)
         self.emit(
             "xai_update",
             {
@@ -372,6 +382,85 @@ class ConversationSession:
         except Exception as exc:
             self.log("vision", "error", f"vision context failed: {exc}")
             return ""
+
+    def _memory_context(self, user_text: str) -> str:
+        """Build the [USER MEMORY] block injected before the user's message."""
+        if not self.memory_store or not bool(self.cfg.get("memory.attach_to_prompt", True)):
+            return ""
+        try:
+            block = self.memory_store.build_context_block(
+                user_text,
+                user_id=self.user_id,
+                max_facts=int(self.cfg.get("memory.max_facts", 8)),
+                k_recall=int(self.cfg.get("memory.recall_k", 3)),
+            )
+            if block:
+                self.log("memory", "info", "memory context attached", chars=len(block))
+            return block
+        except Exception as exc:
+            self.log("memory", "error", f"memory context failed: {exc}")
+            return ""
+
+    def _remember_turn(self, user_text: str, answer: str) -> None:
+        """Persist the exchange and any durable facts. Never raises into the turn."""
+        if not self.memory_store:
+            return
+        try:
+            self.memory_store.add_episode(user_text, answer, meta={"sid": self.sid}, user_id=self.user_id)
+            if bool(self.cfg.get("memory.extract_facts", True)):
+                facts = extract_facts(user_text)
+                if facts:
+                    n = self.memory_store.remember_facts(facts, source="conversation", user_id=self.user_id)
+                    self.log("memory", "info", "stored durable facts", count=n, facts=facts)
+            keep = int(self.cfg.get("memory.max_episodes", 2000))
+            if keep > 0:
+                self.memory_store.prune_episodes(keep=keep, user_id=self.user_id)
+        except Exception as exc:
+            self.log("memory", "error", f"remember turn failed: {exc}")
+        self._maybe_summarize()
+
+    def _maybe_summarize(self) -> None:
+        """When the conversation grows long, fold old turns into a stored summary.
+
+        Runs on a background thread so it never adds latency to the live reply.
+        Only one summarization runs at a time. The summary is what feeds the
+        'Previous context' line of the [USER MEMORY] block on later turns.
+        """
+        if not self.memory_store or not bool(self.cfg.get("memory.summary.enabled", True)):
+            return
+        if self._summarizing:
+            return
+        trigger_turns = int(self.cfg.get("memory.summary.trigger_turns", 12))
+        keep_recent = int(self.cfg.get("memory.summary.keep_recent_turns", 6))
+        # history holds 2 entries per exchange (user + assistant).
+        if len(self.history) < trigger_turns * 2:
+            return
+        self._summarizing = True
+        threading.Thread(target=self._summarize_worker, args=(keep_recent,), daemon=True, name="voicepi-summary").start()
+
+    def _summarize_worker(self, keep_recent: int) -> None:
+        try:
+            with self.lock:
+                old = self.history[: -keep_recent * 2] if keep_recent > 0 else list(self.history)
+                if not old:
+                    return
+            previous = self.memory_store.latest_summary(user_id=self.user_id)
+            summary = self.llm_engine.summarize(
+                old,
+                previous_summary=previous,
+                max_tokens=int(self.cfg.get("memory.summary.max_tokens", 160)),
+            )
+            if summary and summary != previous:
+                self.memory_store.add_summary(summary, user_id=self.user_id)
+                self.log("memory", "info", "rolling summary updated", chars=len(summary))
+            # Trim short-term history; the summary preserves the older context.
+            with self.lock:
+                if keep_recent > 0 and len(self.history) > keep_recent * 2:
+                    self.history = self.history[-keep_recent * 2 :]
+        except Exception as exc:
+            self.log("memory", "error", f"summarization failed: {exc}")
+        finally:
+            self._summarizing = False
 
     def _should_run_robot_planner(self, user_text: str) -> bool:
         if not bool(self.cfg.get("robot.fast_intent_gate", True)):

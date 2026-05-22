@@ -36,7 +36,18 @@ const els = {
   xaiRaw: document.getElementById('xaiRaw'),
   xaiMetrics: document.getElementById('xaiMetrics'),
   xaiPrompt: document.getElementById('xaiPrompt'),
-  xaiRobot: document.getElementById('xaiRobot')
+  xaiRobot: document.getElementById('xaiRobot'),
+  sysBadge: document.getElementById('sysBadge'),
+  sysTempRow: document.getElementById('sysTempRow'),
+  sysTempVal: document.getElementById('sysTempVal'),
+  sysTempBar: document.getElementById('sysTempBar'),
+  sysCpuRow: document.getElementById('sysCpuRow'),
+  sysCpuVal: document.getElementById('sysCpuVal'),
+  sysCpuBar: document.getElementById('sysCpuBar'),
+  sysRamRow: document.getElementById('sysRamRow'),
+  sysRamVal: document.getElementById('sysRamVal'),
+  sysRamBar: document.getElementById('sysRamBar'),
+  sysExtra: document.getElementById('sysExtra')
 };
 
 let socket;
@@ -493,5 +504,54 @@ fetch('/camera/status')
   .then(r => r.json())
   .then(updateCameraStatus)
   .catch(err => appendLog({ event: 'camera_status_error', error: String(err) }));
+
+// ---- Raspberry Pi system telemetry ----
+function setMetric(rowEl, valEl, barEl, value, unit, severity, maxScale) {
+  const sev = severity || (value === null || value === undefined ? 'unknown' : 'ok');
+  if (rowEl) rowEl.className = `sysMetric ${sev}`;
+  if (valEl) valEl.textContent = (value === null || value === undefined) ? 'n/a' : `${value}${unit}`;
+  if (barEl) {
+    const pct = (value === null || value === undefined) ? 0 : Math.max(0, Math.min(100, (value / maxScale) * 100));
+    barEl.style.width = `${pct}%`;
+  }
+}
+
+function renderSystemStats(data) {
+  if (!data || !data.ok) {
+    if (els.sysBadge) setBadge(els.sysBadge, 'system: unavailable');
+    return;
+  }
+  const t = data.temperature || {};
+  const c = data.cpu || {};
+  const r = data.ram || {};
+  setMetric(els.sysTempRow, els.sysTempVal, els.sysTempBar, t.value_c, ' °C', t.severity, 100);
+  setMetric(els.sysCpuRow, els.sysCpuVal, els.sysCpuBar, c.value_pct, ' %', c.severity, 100);
+  setMetric(els.sysRamRow, els.sysRamVal, els.sysRamBar, r.value_pct, ' %', r.severity, 100);
+
+  const sevClass = data.severity === 'critical' ? 'danger' : (data.severity === 'warn' ? 'warn' : 'ok');
+  const sevText = data.severity === 'critical' ? 'overheating/overloaded' : (data.severity === 'warn' ? 'high' : 'healthy');
+  if (els.sysBadge) setBadge(els.sysBadge, `system: ${sevText}`, sevClass);
+
+  if (els.sysExtra) {
+    const bits = [];
+    if (c.cores) bits.push(`${c.cores} cores`);
+    if (c.freq_mhz) bits.push(`${Math.round(c.freq_mhz)} MHz`);
+    if (Array.isArray(c.load_avg)) bits.push(`load ${c.load_avg.map(x => x.toFixed(2)).join(' / ')}`);
+    if (r.used_mb && r.total_mb) bits.push(`${Math.round(r.used_mb)}/${Math.round(r.total_mb)} MB`);
+    els.sysExtra.textContent = bits.join(' · ') || '';
+  }
+}
+
+function pollSystemStats() {
+  fetch('/system/stats')
+    .then(r => r.json())
+    .then(renderSystemStats)
+    .catch(() => { if (els.sysBadge) setBadge(els.sysBadge, 'system: unavailable'); });
+}
+
+if (els.sysTempRow) {
+  pollSystemStats();
+  setInterval(pollSystemStats, 2000);
+}
 
 initSocket();

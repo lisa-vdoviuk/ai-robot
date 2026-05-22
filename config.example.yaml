@@ -90,6 +90,44 @@ logging:
   jsonl_path: "logs/voicepi.jsonl"
   console: true
 
+memory:
+  # Local long-term memory: user profile facts, episodic recall, and rolling summaries.
+  # Stored in a local SQLite file so reads stay sub-millisecond and the robot works offline.
+  enabled: true
+  db_path: "logs/memory.sqlite"
+  user_id: "default"
+  # Inject a compact [USER MEMORY] block into the prompt before the user's message.
+  attach_to_prompt: true
+  # How many durable facts (name, likes, etc.) to include in that block.
+  max_facts: 8
+  # How many keyword/semantically relevant past exchanges to recall per turn.
+  recall_k: 3
+  # Cheap, no-LLM extraction of durable facts (English + Ukrainian) from each user message.
+  extract_facts: true
+  # Keep the DB bounded on a small device; oldest episodes beyond this are pruned.
+  max_episodes: 2000
+
+  # Optional semantic recall. Without this, recall uses fast FTS5 keyword search.
+  # With it, past episodes are also re-ranked by cosine similarity of embeddings,
+  # so the robot can recall by meaning, not just matching words.
+  embeddings:
+    enabled: false
+    # A small GGUF embedding model. Download e.g. nomic-embed-text or bge-small-en
+    # and point here. Leave disabled until the model file is present.
+    model_path: "models/embed/nomic-embed-text-v1.5.Q4_K_M.gguf"
+    n_ctx: 512
+    n_threads: 4
+
+  # Rolling summarization: when the chat gets long, fold old turns into a short
+  # stored summary (runs in the background, off the live reply path).
+  summary:
+    enabled: true
+    # Summarize once the live history reaches this many exchanges.
+    trigger_turns: 12
+    # How many recent exchanges to keep verbatim after summarizing.
+    keep_recent_turns: 6
+    max_tokens: 160
+
 camera:
   # Uses Picamera2 and serves /camera/stream.mjpg plus /camera/snapshot.jpg.
   enabled: true
@@ -148,3 +186,16 @@ robot:
   # Emergency behavior.
   stop_on_barge_in: true
   stop_on_disconnect: true
+
+system:
+  # Raspberry Pi health telemetry shown on the dashboard (CPU temp, CPU load, RAM).
+  enabled: true
+  # How often the background sampler refreshes (seconds). The dashboard polls /system/stats.
+  interval_s: 2.0
+  # Thresholds for highlighting. The Pi 5 starts soft-throttling around 80-85 C.
+  temp_warn_c: 70.0
+  temp_critical_c: 80.0
+  cpu_warn_pct: 80.0
+  cpu_critical_pct: 92.0
+  ram_warn_pct: 80.0
+  ram_critical_pct: 92.0

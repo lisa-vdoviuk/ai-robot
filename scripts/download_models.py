@@ -55,6 +55,10 @@ PIPER_PROFILES = {
         "en/en_US/amy/high/en_US-amy-high.onnx",
         "en/en_US/amy/high/en_US-amy-high.onnx.json",
     ),
+    "amy-medium": (
+        "en/en_US/amy/medium/en_US-amy-medium.onnx",
+        "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+    ),
 }
 
 VISION_PROFILES = {
@@ -223,7 +227,7 @@ def main() -> None:
     parser.add_argument("--skip-vision", action="store_true")
     parser.add_argument("--llm", choices=LLM_PROFILES, default="quality")
     parser.add_argument("--stt", choices=VOSK_PROFILES, default="quality")
-    parser.add_argument("--tts", choices=PIPER_PROFILES, default="amy-high")
+    parser.add_argument("--tts", choices=PIPER_PROFILES, default="amy-medium")
     parser.add_argument("--vision", choices=VISION_PROFILES, default="mobilenet-ssd")
     parser.add_argument(
         "--small-first",

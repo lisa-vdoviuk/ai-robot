@@ -13,10 +13,13 @@ from flask_sock import Sock
 
 from voicepi.camera import CameraManager
 from voicepi.config import Config
+from voicepi.embeddings import build_embedder
 from voicepi.llm_engine import LLMEngine
 from voicepi.logging_utils import JsonlLogger
+from voicepi.memory import MemoryStore
 from voicepi.robot_controller import RobotController
 from voicepi.session import ConversationSession
+from voicepi.system_stats import SystemStatsMonitor
 from voicepi.tts_piper import PiperTTS
 from voicepi.vision import VisionObservation, VisionService
 
@@ -60,6 +63,33 @@ def create_app(cfg: Config) -> Flask:
         logger.event("boot", "info", "robot controller enabled", base_url=robot_controller.base_url)
     else:
         logger.event("boot", "info", "robot controller disabled")
+
+    memory_store: MemoryStore | None = None
+    if bool(cfg.get("memory.enabled", True)):
+        try:
+            db_path = cfg.path("memory.db_path", "logs/memory.sqlite")
+            embedder = build_embedder(cfg)
+            memory_store = MemoryStore(db_path, embedder=embedder, logger=logger)
+            logger.event(
+                "boot", "info", "memory enabled",
+                db=str(db_path),
+                semantic=bool(embedder),
+                stats=memory_store.stats(),
+            )
+            atexit.register(memory_store.close)
+        except Exception as exc:
+            logger.event("boot", "error", f"memory disabled (init failed): {exc}")
+            memory_store = None
+    else:
+        logger.event("boot", "info", "memory disabled")
+
+    system_monitor = SystemStatsMonitor(cfg, logger=logger)
+    system_monitor.start()
+    if system_monitor.enabled:
+        logger.event("boot", "info", "system monitor enabled", interval_s=system_monitor.interval_s)
+        atexit.register(system_monitor.stop)
+    else:
+        logger.event("boot", "info", "system monitor disabled")
 
     camera_manager = CameraManager(cfg, logger=logger)
     camera_manager.start()
@@ -113,6 +143,10 @@ def create_app(cfg: Config) -> Flask:
     def camera_status():
         return jsonify({"camera": camera_manager.status().to_dict(), "vision": vision_service.status()})
 
+    @app.get("/system/stats")
+    def system_stats():
+        return jsonify(system_monitor.latest())
+
     @app.get("/camera/snapshot.jpg")
     def camera_snapshot():
         frame = camera_manager.latest_jpeg()
@@ -143,7 +177,7 @@ def create_app(cfg: Config) -> Flask:
         transport = WebSocketTransport(ws)
         sess: ConversationSession | None = None
         try:
-            sess = ConversationSession(sid, transport, cfg, logger, llm_engine, tts_engine, robot_controller, vision_service)
+            sess = ConversationSession(sid, transport, cfg, logger, llm_engine, tts_engine, robot_controller, vision_service, memory_store)
             sessions[sid] = sess
             sess.log("session", "info", "client connected")
             sess.emit("server_ready", {"sid": sid, "assistant_name": cfg.get("assistant.name", "VoicePi")})

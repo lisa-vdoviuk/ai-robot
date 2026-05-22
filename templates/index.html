@@ -17,6 +17,7 @@
       <span id="micBadge" class="badge">microphone: off</span>
       <span id="talkBadge" class="badge">dialogue: idle</span>
       <span id="cameraBadge" class="badge">camera: checking…</span>
+      <span id="sysBadge" class="badge">system: …</span>
     </div>
   </header>
 
@@ -44,6 +45,34 @@
         <label>Minimum speech, ms <input id="minSpeechMs" type="number" step="20" min="40" max="1000" value="{{ min_speech_ms }}" /></label>
       </details>
       <p class="hint">When the assistant is speaking, start talking to interrupt. The browser uses a higher barge-in threshold to avoid cancelling itself from speaker echo.</p>
+    </section>
+
+    <section class="card system">
+      <h2>Raspberry Pi</h2>
+      <div class="sysGrid">
+        <div class="sysMetric" id="sysTempRow">
+          <div class="sysMetricHead">
+            <span class="sysLabel">CPU temperature</span>
+            <span class="sysVal" id="sysTempVal">—</span>
+          </div>
+          <div class="sysBar"><div class="sysBarFill" id="sysTempBar"></div></div>
+        </div>
+        <div class="sysMetric" id="sysCpuRow">
+          <div class="sysMetricHead">
+            <span class="sysLabel">CPU load</span>
+            <span class="sysVal" id="sysCpuVal">—</span>
+          </div>
+          <div class="sysBar"><div class="sysBarFill" id="sysCpuBar"></div></div>
+        </div>
+        <div class="sysMetric" id="sysRamRow">
+          <div class="sysMetricHead">
+            <span class="sysLabel">RAM usage</span>
+            <span class="sysVal" id="sysRamVal">—</span>
+          </div>
+          <div class="sysBar"><div class="sysBarFill" id="sysRamBar"></div></div>
+        </div>
+      </div>
+      <p class="hint" id="sysExtra">Waiting for system telemetry…</p>
     </section>
 
     <section class="card camera">
