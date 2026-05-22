@@ -135,17 +135,22 @@ camera:
   height: 480
 
 vision:
-  # Basic local vision: MediaPipe Hands if installed, otherwise lower-confidence OpenCV contours.
+  # Basic local computer vision: scene awareness from camera frames.
   # Object detection uses OpenCV DNN + MobileNet-SSD when models/vision files are present.
+  # Motion detection works with OpenCV only and does not need extra model files.
   enabled: true
-  poll_interval_s: 1.0
+  poll_interval_s: 2.0
   snapshot_on_turn: true
   always_attach_to_prompt: true
-  max_prompt_age_s: 2.5
-  max_hands: 1
-  min_detection_confidence: 0.55
-  min_tracking_confidence: 0.5
-  min_hand_area_ratio: 0.015
+  max_prompt_age_s: 3.0
+  # Keep poll observations out of the server console; manual/turn/error observations are still logged.
+  log_poll_observations: false
+  # A known object occupying this much of the frame is treated as a possible close obstacle.
+  obstacle_area_ratio: 0.10
+  motion:
+    enabled: true
+    threshold: 24
+    min_area_ratio: 0.01
   object_detection:
     enabled: true
     model_path: "models/vision/mobilenet_iter_73000.caffemodel"
@@ -179,7 +184,7 @@ robot:
   max_duration_ms: 1800
   default_duration_ms: 700
   planner_max_tokens: 80
-  # Speeds up normal chat: only run the LLM robot planner when the transcript looks robot/gesture-related.
+  # Speeds up normal chat: only run the LLM robot planner when the transcript looks robot-control-related.
   # This gate never executes commands by itself; it only decides whether to ask the planner.
   fast_intent_gate: true
 

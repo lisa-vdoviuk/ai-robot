@@ -95,41 +95,57 @@ function updateCameraStatus(payload) {
 }
 
 function formatObservation(data) {
-  const hand = data.hand || {};
   const objects = Array.isArray(data.objects) ? data.objects : [];
+  const scene = data.scene || {};
+  const motion = data.motion || {};
   const objectLines = objects.length
     ? objects.slice(0, 8).map((obj, idx) => {
         const conf = typeof obj.confidence === 'number' ? obj.confidence.toFixed(2) : (obj.confidence || 'n/a');
+        const zone = obj.zone ? ` zone=${obj.zone}` : '';
+        const area = typeof obj.area_ratio === 'number' ? ` area=${obj.area_ratio}` : '';
         const box = obj.bbox ? ` bbox=${JSON.stringify(obj.bbox)}` : '';
-        return `object_${idx + 1}: ${obj.label || 'object'} confidence=${conf}${box}`;
+        return `object_${idx + 1}: ${obj.label || 'object'} confidence=${conf}${zone}${area}${box}`;
       })
     : [];
+  const closeObstacles = Array.isArray(scene.close_obstacles) ? scene.close_obstacles : [];
   return [
     `time: ${data.iso || 'unknown'}`,
     `backend: ${data.backend || 'unknown'}`,
     `summary: ${data.summary || ''}`,
     `confidence: ${typeof data.confidence === 'number' ? data.confidence.toFixed(2) : data.confidence || 'n/a'}`,
-    hand.detected !== undefined ? `hand_detected: ${hand.detected}` : null,
-    hand.gesture ? `gesture: ${hand.gesture}` : null,
-    hand.finger_count !== undefined && hand.finger_count !== null ? `finger_count: ${hand.finger_count}` : null,
-    hand.fingers ? `fingers: ${JSON.stringify(hand.fingers)}` : null,
-    objects.length ? `objects_count: ${objects.length}` : null,
+    scene.attention ? `scene_attention: ${scene.attention}` : null,
+    scene.person_count !== undefined ? `person_count: ${scene.person_count}` : null,
+    scene.object_count !== undefined ? `objects_count: ${scene.object_count}` : (objects.length ? `objects_count: ${objects.length}` : null),
+    scene.object_zones ? `object_zones: ${JSON.stringify(scene.object_zones)}` : null,
+    closeObstacles.length ? `close_obstacles: ${JSON.stringify(closeObstacles)}` : null,
+    motion.enabled !== undefined ? `motion_enabled: ${motion.enabled}` : null,
+    motion.detected !== undefined ? `motion_detected: ${motion.detected}` : null,
+    motion.zone ? `motion_zone: ${motion.zone}` : null,
+    motion.changed_area_ratio !== undefined ? `motion_area: ${motion.changed_area_ratio}` : null,
     ...objectLines,
     data.error ? `error: ${data.error}` : null
   ].filter(Boolean).join('\n');
 }
 
+let lastVisionLogLine = '';
+let lastVisionLogAt = 0;
 function updateVision(data) {
   if (!data) return;
   if (els.visionCurrent) els.visionCurrent.textContent = formatObservation(data);
   if (els.visionBadge) setBadge(els.visionBadge, data.ok ? `vision: ${data.backend || 'ok'}` : 'vision: error', data.ok ? 'ok' : 'danger');
   if (els.visionLogs) {
     const line = `[${data.iso || new Date().toISOString()}] ${data.summary || JSON.stringify(data)}`;
-    els.visionLogs.textContent += line + '\n';
-    els.visionLogs.scrollTop = els.visionLogs.scrollHeight;
+    const now = Date.now();
+    const changed = line.replace(/^\[[^\]]+\]\s*/, '') !== lastVisionLogLine;
+    const important = data.reason && data.reason !== 'poll';
+    if (important || changed || now - lastVisionLogAt > 10000) {
+      lastVisionLogLine = line.replace(/^\[[^\]]+\]\s*/, '');
+      lastVisionLogAt = now;
+      els.visionLogs.textContent += line + '\n';
+      els.visionLogs.scrollTop = els.visionLogs.scrollHeight;
+    }
   }
 }
-
 function appendMessage(role, text = '') {
   const div = document.createElement('div');
   div.className = `msg ${role}`;

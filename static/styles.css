@@ -38,10 +38,24 @@ h1 { margin-bottom: 4px; }
 .badge.ok { color: var(--ok); border-color: rgba(143,255,193,.4); }
 .badge.warn { color: var(--warn); border-color: rgba(255,211,143,.4); }
 .badge.danger { color: var(--danger); border-color: rgba(255,143,154,.4); }
-.layout { display: grid; grid-template-columns: 390px 1fr; gap: 16px; padding: 16px; align-items: start; }
+.layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
+  grid-template-areas:
+    "controls transcript"
+    "system xai"
+    "camera logs";
+  gap: 16px;
+  padding: 16px;
+  align-items: start;
+}
 .card { background: rgba(23,27,36,.92); border: 1px solid var(--border); border-radius: 20px; padding: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.22); }
-.controls, .logs { grid-column: 1; }
-.transcript, .xai { grid-column: 2; }
+.controls { grid-area: controls; }
+.system { grid-area: system; }
+.camera { grid-area: camera; }
+.transcript { grid-area: transcript; }
+.xai { grid-area: xai; }
+.logs { grid-area: logs; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 button, input { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--panel2); color: var(--text); }
 button { cursor: pointer; }
@@ -69,11 +83,18 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-
 .logHeader { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 #logs { max-height: 34vh; overflow: auto; color: #c8d1e8; background: #0c0f15; border-radius: 14px; padding: 12px; border: 1px solid var(--border); }
 @media (max-width: 980px) {
-  .layout { grid-template-columns: 1fr; }
-  .controls, .logs, .transcript, .xai { grid-column: 1; }
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "controls"
+      "transcript"
+      "system"
+      "camera"
+      "xai"
+      "logs";
+  }
   .topbar { flex-direction: column; }
 }
-.camera { grid-column: 1; }
 .cameraStatus { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .cameraFrameWrap { background: #0c0f15; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; min-height: 180px; display: grid; place-items: center; }
 #cameraStream { width: 100%; display: block; aspect-ratio: 4 / 3; object-fit: contain; background: #05070a; }
@@ -85,7 +106,6 @@ h3 { margin: 14px 0 8px; font-size: 14px; color: var(--muted); }
 .visionBox.small { min-height: 70px; max-height: 160px; color: #c8d1e8; }
 
 /* Raspberry Pi system telemetry panel */
-.system { grid-column: 1; }
 .sysGrid { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .sysMetric { display: flex; flex-direction: column; gap: 6px; }
 .sysMetricHead { display: flex; justify-content: space-between; align-items: baseline; }
@@ -103,3 +123,27 @@ h3 { margin: 14px 0 8px; font-size: 14px; color: var(--muted); }
 .sysMetric.unknown .sysVal { color: var(--muted); }
 @keyframes sysPulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
 #sysExtra { margin-top: 14px; margin-bottom: 0; font-variant-numeric: tabular-nums; }
+
+/* Memory dashboard */
+.memoryLayout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; align-items: start; }
+.memoryHero { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.memoryStats { grid-column: 1 / -1; }
+.statGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.statGrid > div { background: #0c0f15; border: 1px solid var(--border); border-radius: 16px; padding: 14px; }
+.statValue { display: block; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.statLabel { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+.memoryList { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow: auto; padding-right: 4px; }
+.memoryList.empty { color: var(--muted); display: block; }
+.memoryItem { background: #0c0f15; border: 1px solid var(--border); border-radius: 16px; padding: 12px; line-height: 1.45; }
+.memoryItemHead { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); margin-bottom: 8px; }
+.memoryItemHead strong { color: var(--text); }
+.memoryItem small { color: var(--muted); display: block; margin-top: 8px; }
+.memoryBox { min-height: 120px; max-height: 42vh; overflow: auto; padding: 12px; background: #0c0f15; border-radius: 14px; border: 1px solid var(--border); }
+.roleChip { display: inline-block; min-width: 72px; color: var(--accent); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+.assistantChip { color: var(--ok); }
+code { background: #0c0f15; border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px; }
+@media (max-width: 980px) {
+  .memoryLayout { grid-template-columns: 1fr; }
+  .memoryHero, .memoryStats { grid-column: 1; }
+  .statGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

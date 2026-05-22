@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -16,6 +15,11 @@ VOC_CLASSES = [
     "potted plant", "sheep", "sofa", "train", "tv monitor",
 ]
 
+OBSTACLE_LABELS = {
+    "person", "chair", "dining table", "sofa", "bottle", "cat", "dog", "car", "bus",
+    "bicycle", "motorbike", "potted plant", "tv monitor",
+}
+
 
 @dataclass(frozen=True)
 class VisionObservation:
@@ -25,8 +29,9 @@ class VisionObservation:
     backend: str
     summary: str
     confidence: float = 0.0
-    hand: dict[str, Any] = field(default_factory=dict)
     objects: list[dict[str, Any]] = field(default_factory=list)
+    scene: dict[str, Any] = field(default_factory=dict)
+    motion: dict[str, Any] = field(default_factory=dict)
     frame: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     reason: str = "poll"
@@ -39,48 +44,60 @@ class VisionObservation:
             "backend": self.backend,
             "summary": self.summary,
             "confidence": self.confidence,
-            "hand": self.hand,
             "objects": self.objects,
+            "scene": self.scene,
+            "motion": self.motion,
             "frame": self.frame,
             "error": self.error,
             "reason": self.reason,
         }
 
     def to_prompt_text(self) -> str:
-        hand = self.hand or {}
         parts = [
             f"time={self.iso}",
             f"backend={self.backend}",
             f"summary={self.summary}",
             f"confidence={self.confidence:.2f}",
         ]
-        if hand:
-            parts.append(f"hand_detected={hand.get('detected')}")
-            parts.append(f"gesture={hand.get('gesture')}")
-            parts.append(f"finger_count={hand.get('finger_count')}")
-            if hand.get("fingers"):
-                parts.append(f"fingers={hand.get('fingers')}")
+        if self.scene:
+            compact_scene = {
+                "person_count": self.scene.get("person_count", 0),
+                "close_obstacles": self.scene.get("close_obstacles", []),
+                "object_zones": self.scene.get("object_zones", {}),
+                "attention": self.scene.get("attention", "clear"),
+            }
+            parts.append(f"scene={compact_scene}")
         if self.objects:
-            compact = [
+            compact_objects = [
                 {
                     "label": obj.get("label"),
                     "confidence": obj.get("confidence"),
+                    "zone": obj.get("zone"),
+                    "area_ratio": obj.get("area_ratio"),
                     "bbox": obj.get("bbox"),
                 }
                 for obj in self.objects[:6]
             ]
-            parts.append(f"objects={compact}")
+            parts.append(f"objects={compact_objects}")
+        if self.motion:
+            compact_motion = {
+                "detected": self.motion.get("detected", False),
+                "zone": self.motion.get("zone"),
+                "changed_area_ratio": self.motion.get("changed_area_ratio"),
+            }
+            parts.append(f"motion={compact_motion}")
         if self.error:
             parts.append(f"error={self.error}")
         return "\n".join(parts)
 
 
 class VisionService:
-    """Turns camera frames into concise text observations for the UI and LLM prompt.
+    """Converts camera frames into concise local scene observations.
 
-    The local LLM in this project is text-only. This service is the bridge: it converts
-    the latest camera frame into structured text such as "open palm, 5 fingers" and
-    basic object detections such as "person" or "bottle".
+    The local LLM is text-only, so this service turns the Pi camera stream into
+    structured text: known objects, rough zones, close-obstacle hints and motion.
+    This is a useful computer-vision base for later navigation and interaction
+    without the previous hand-control pipeline.
     """
 
     def __init__(self, cfg, camera: CameraManager, logger=None) -> None:
@@ -88,10 +105,11 @@ class VisionService:
         self.camera = camera
         self.logger = logger
         self.enabled = bool(cfg.get("vision.enabled", False))
-        self.poll_interval_s = float(cfg.get("vision.poll_interval_s", 1.0))
-        self.max_prompt_age_s = float(cfg.get("vision.max_prompt_age_s", 2.5))
+        self.poll_interval_s = float(cfg.get("vision.poll_interval_s", 2.0))
+        self.max_prompt_age_s = float(cfg.get("vision.max_prompt_age_s", 3.0))
         self.snapshot_on_turn = bool(cfg.get("vision.snapshot_on_turn", True))
         self.always_attach = bool(cfg.get("vision.always_attach_to_prompt", True))
+        self.log_poll_observations = bool(cfg.get("vision.log_poll_observations", False))
         self.analyzer = BasicVisionAnalyzer(cfg)
         self._latest: VisionObservation | None = None
         self._latest_lock = threading.RLock()
@@ -162,9 +180,10 @@ class VisionService:
         vision_words = [
             "see", "seeing", "look", "camera", "frame", "image", "photo", "picture",
             "object", "objects", "recognize", "detect", "what is", "what are",
-            "hand", "hands", "finger", "fingers", "fist", "thumb", "gesture", "palm",
+            "person", "face", "obstacle", "motion", "movement", "around", "nearby",
             "бач", "камера", "камер", "зір", "фото", "картин", "об'єкт", "обєкт",
-            "предмет", "розпізн", "детект", "що бач", "рук", "палець", "пальц", "кулак", "жест", "долон",
+            "предмет", "розпізн", "детект", "що бач", "людин", "облич", "перешкод",
+            "рух", "руха", "навколо", "поруч",
         ]
         likely_visual = any(word in lower for word in vision_words)
 
@@ -196,7 +215,9 @@ class VisionService:
     def _publish(self, obs: VisionObservation) -> None:
         with self._latest_lock:
             self._latest = obs
-        self._log("vision", "info" if obs.ok else "warning", obs.summary, observation=obs.to_dict())
+        should_log = obs.reason != "poll" or self.log_poll_observations or not obs.ok
+        if should_log:
+            self._log("vision", "info" if obs.ok else "warning", obs.summary, observation=obs.to_dict())
         for cb in list(self._listeners):
             try:
                 cb(obs)
@@ -210,8 +231,9 @@ class VisionService:
         summary: str,
         *,
         confidence: float = 0.0,
-        hand: dict[str, Any] | None = None,
         objects: list[dict[str, Any]] | None = None,
+        scene: dict[str, Any] | None = None,
+        motion: dict[str, Any] | None = None,
         frame: dict[str, Any] | None = None,
         error: str | None = None,
         reason: str = "poll",
@@ -224,8 +246,9 @@ class VisionService:
             backend=backend,
             summary=summary,
             confidence=confidence,
-            hand=hand or {},
             objects=objects or [],
+            scene=scene or {},
+            motion=motion or {},
             frame=frame or {},
             error=error,
             reason=reason,
@@ -240,13 +263,18 @@ class VisionService:
 
 
 class BasicVisionAnalyzer:
+    """Object + motion scene analyzer.
+
+    Kept under the old class name so the rest of the app does not need to know
+    the implementation is now scene awareness.
+    """
+
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self.backend_name = "auto"
-        self._mp_hands = None
-        self._mp = None
-        self._mediapipe_failed = False
+        self.backend_name = "scene"
         self.object_detector = ObjectDetector(cfg)
+        self._prev_gray = None
+        self._prev_motion_ts = 0.0
 
     def analyze(self, jpeg: bytes, reason: str = "poll") -> VisionObservation:
         now = time.time()
@@ -259,7 +287,7 @@ class BasicVisionAnalyzer:
                 ts=now,
                 iso=iso,
                 backend="frame-only",
-                summary="Camera frame is available. Install python3-opencv for hand and object detection.",
+                summary="Camera frame is available. Install python3-opencv for object and motion detection.",
                 confidence=0.2,
                 frame={"jpeg_bytes": len(jpeg)},
                 reason=reason,
@@ -282,12 +310,29 @@ class BasicVisionAnalyzer:
         height, width = image.shape[:2]
         frame = {"width": int(width), "height": int(height), "jpeg_bytes": len(jpeg)}
         objects = self.object_detector.detect(image, cv2, np)
-
-        mp_obs = self._try_mediapipe(image, cv2, now, iso, frame, objects, reason)
-        if mp_obs is not None:
-            return mp_obs
-
-        return self._analyze_with_opencv_contours(image, cv2, np, now, iso, frame, objects, reason)
+        objects = [self._add_spatial_features(obj, width, height) for obj in objects]
+        motion = self._detect_motion(image, cv2, np)
+        scene = self._build_scene(objects, motion)
+        summary = self._summary(objects, scene, motion)
+        confidence = max(
+            self._objects_confidence(objects),
+            float(motion.get("confidence", 0.0) or 0.0),
+            0.35 if objects or motion.get("detected") else 0.25,
+        )
+        self.backend_name = self._backend_name()
+        return VisionObservation(
+            ok=True,
+            ts=now,
+            iso=iso,
+            backend=self.backend_name,
+            summary=summary,
+            confidence=round(min(1.0, confidence), 3),
+            objects=objects,
+            scene=scene,
+            motion=motion,
+            frame=frame,
+            reason=reason,
+        )
 
     def _load_cv(self):
         try:
@@ -297,139 +342,153 @@ class BasicVisionAnalyzer:
         except Exception:
             return None, None
 
-    def _try_mediapipe(self, image, cv2, now: float, iso: str, frame: dict[str, Any], objects: list[dict[str, Any]], reason: str) -> VisionObservation | None:
-        if self._mediapipe_failed:
-            return None
+    def _backend_name(self) -> str:
+        detector_backend = self.object_detector.backend_name or "no-objects"
+        return f"scene:{detector_backend}+motion"
+
+    def _add_spatial_features(self, obj: dict[str, Any], width: int, height: int) -> dict[str, Any]:
+        bbox = obj.get("bbox") or []
+        enriched = dict(obj)
         try:
-            if self._mp_hands is None:
-                import mediapipe as mp  # type: ignore
-                self._mp = mp
-                self._mp_hands = mp.solutions.hands.Hands(
-                    static_image_mode=True,
-                    max_num_hands=int(self.cfg.get("vision.max_hands", 1)),
-                    min_detection_confidence=float(self.cfg.get("vision.min_detection_confidence", 0.55)),
-                    min_tracking_confidence=float(self.cfg.get("vision.min_tracking_confidence", 0.5)),
-                )
-            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            result = self._mp_hands.process(rgb)
-        except Exception:
-            self._mediapipe_failed = True
-            return None
-
-        if not getattr(result, "multi_hand_landmarks", None):
-            summary = self._combined_summary("No hand detected in the current camera frame.", objects)
-            return VisionObservation(
-                ok=True,
-                ts=now,
-                iso=iso,
-                backend=self._backend_with_objects("mediapipe"),
-                summary=summary,
-                confidence=max(0.55, self._objects_confidence(objects)),
-                hand={"detected": False, "gesture": "none", "finger_count": None},
-                objects=objects,
-                frame=frame,
-                reason=reason,
-            )
-
-        hand_landmarks = result.multi_hand_landmarks[0]
-        handedness = None
-        score = 0.75
-        if getattr(result, "multi_handedness", None):
-            cls = result.multi_handedness[0].classification[0]
-            handedness = getattr(cls, "label", None)
-            score = float(getattr(cls, "score", score))
-
-        lm = hand_landmarks.landmark
-        fingers = self._fingers_from_landmarks(lm)
-        finger_count = int(sum(1 for is_up in fingers.values() if is_up))
-        gesture = self._gesture_from_fingers(fingers, lm)
-        hand_summary = self._hand_summary(gesture, finger_count, score)
-        summary = self._combined_summary(hand_summary, objects)
-        hand = {
-            "detected": True,
-            "gesture": gesture,
-            "finger_count": finger_count,
-            "fingers": fingers,
-            "handedness": handedness,
-        }
-        return VisionObservation(
-            ok=True,
-            ts=now,
-            iso=iso,
-            backend=self._backend_with_objects("mediapipe"),
-            summary=summary,
-            confidence=max(max(0.0, min(1.0, score)), self._objects_confidence(objects)),
-            hand=hand,
-            objects=objects,
-            frame=frame,
-            reason=reason,
-        )
-
-    def _fingers_from_landmarks(self, lm) -> dict[str, bool]:
-        # Normalized landmark indices from MediaPipe Hands.
-        def dist(a: int, b: int) -> float:
-            return math.hypot(float(lm[a].x - lm[b].x), float(lm[a].y - lm[b].y))
-
-        # Index/middle/ring/pinky: tip above PIP is a good camera-facing approximation.
-        margin = 0.018
-        index = lm[8].y < lm[6].y - margin
-        middle = lm[12].y < lm[10].y - margin
-        ring = lm[16].y < lm[14].y - margin
-        pinky = lm[20].y < lm[18].y - margin
-
-        # Thumb can point sideways or upward. Count it if the tip is clearly away from the palm.
-        thumb_tip_far = dist(4, 0) > dist(3, 0) + 0.025
-        thumb_sideways = abs(float(lm[4].x - lm[2].x)) > 0.055
-        thumb_vertical = float(lm[4].y) < float(lm[2].y) - 0.045
-        thumb = thumb_tip_far and (thumb_sideways or thumb_vertical)
-        return {
-            "thumb": bool(thumb),
-            "index": bool(index),
-            "middle": bool(middle),
-            "ring": bool(ring),
-            "pinky": bool(pinky),
-        }
-
-    def _gesture_from_fingers(self, fingers: dict[str, bool], lm) -> str:
-        count = sum(1 for v in fingers.values() if v)
-        if count == 0:
-            return "fist"
-        if count >= 4:
-            return "open_palm"
-        if fingers.get("thumb") and count == 1:
-            # Require a mostly vertical thumb for thumbs-up; otherwise it may just be a sideways thumb.
-            if float(lm[4].y) < float(lm[2].y) - 0.06:
-                return "thumbs_up"
-            return "thumb_only"
-        if fingers.get("index") and count == 1:
-            return "one_finger"
-        if fingers.get("index") and fingers.get("middle") and count == 2:
-            return "two_fingers"
-        return f"{count}_fingers"
-
-    def _hand_summary(self, gesture: str, finger_count: int | None, confidence: float) -> str:
-        if gesture == "fist":
-            return "One hand detected: fist / closed hand, 0 raised fingers."
-        if gesture == "open_palm":
-            return "One hand detected: open palm, about 5 raised fingers."
-        if gesture == "thumbs_up":
-            return "One hand detected: thumbs-up gesture."
-        if finger_count is not None:
-            return f"One hand detected: {gesture.replace('_', ' ')}, about {finger_count} raised finger(s)."
-        return f"One hand detected, gesture uncertain. Confidence {confidence:.2f}."
-
-    def _combined_summary(self, hand_summary: str, objects: list[dict[str, Any]]) -> str:
-        if not objects:
-            return hand_summary
-        labels: list[str] = []
-        for obj in objects[:4]:
-            label = str(obj.get("label", "object"))
-            conf = obj.get("confidence")
-            if isinstance(conf, (int, float)):
-                labels.append(f"{label} ({float(conf):.2f})")
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            box_w = max(0, x2 - x1)
+            box_h = max(0, y2 - y1)
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            if cx < width / 3:
+                zone = "left"
+            elif cx > (width * 2) / 3:
+                zone = "right"
             else:
-                labels.append(label)
-        return f"{hand_summary} Objects detected: {', '.join(labels)}."
+                zone = "center"
+            area_ratio = (box_w * box_h) / max(1, width * height)
+            enriched.update({
+                "zone": zone,
+                "center": [round(cx / max(width, 1), 3), round(cy / max(height, 1), 3)],
+                "area_ratio": round(float(area_ratio), 4),
+            })
+        except Exception:
+            enriched.setdefault("zone", "unknown")
+        return enriched
+
+    def _detect_motion(self, image, cv2, np) -> dict[str, Any]:
+        if not bool(self.cfg.get("vision.motion.enabled", True)):
+            return {"enabled": False, "detected": False}
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+            if self._prev_gray is None:
+                self._prev_gray = gray
+                self._prev_motion_ts = time.time()
+                return {"enabled": True, "detected": False, "reason": "priming"}
+
+            frame_delta = cv2.absdiff(self._prev_gray, gray)
+            self._prev_gray = gray
+            self._prev_motion_ts = time.time()
+
+            threshold = int(self.cfg.get("vision.motion.threshold", 24))
+            _, thresh = cv2.threshold(frame_delta, threshold, 255, cv2.THRESH_BINARY)
+            thresh = cv2.dilate(thresh, None, iterations=2)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            height, width = image.shape[:2]
+            frame_area = max(1, width * height)
+            min_area_ratio = float(self.cfg.get("vision.motion.min_area_ratio", 0.01))
+            min_area = frame_area * min_area_ratio
+            moving = []
+            for contour in contours:
+                area = float(cv2.contourArea(contour))
+                if area < min_area:
+                    continue
+                x, y, w, h = cv2.boundingRect(contour)
+                cx = x + w / 2.0
+                zone = "left" if cx < width / 3 else ("right" if cx > width * 2 / 3 else "center")
+                moving.append({"area": area, "bbox": [int(x), int(y), int(x + w), int(y + h)], "zone": zone})
+            if not moving:
+                return {"enabled": True, "detected": False, "changed_area_ratio": 0.0, "contours": 0}
+            total_area_ratio = sum(item["area"] for item in moving) / frame_area
+            largest = max(moving, key=lambda item: item["area"])
+            confidence = min(1.0, 0.35 + total_area_ratio * 4.0)
+            return {
+                "enabled": True,
+                "detected": True,
+                "zone": largest["zone"],
+                "bbox": largest["bbox"],
+                "changed_area_ratio": round(float(total_area_ratio), 4),
+                "contours": len(moving),
+                "confidence": round(float(confidence), 3),
+            }
+        except Exception as exc:
+            return {"enabled": True, "detected": False, "error": str(exc)}
+
+    def _build_scene(self, objects: list[dict[str, Any]], motion: dict[str, Any]) -> dict[str, Any]:
+        object_zones = {"left": [], "center": [], "right": [], "unknown": []}
+        close_threshold = float(self.cfg.get("vision.obstacle_area_ratio", 0.10))
+        close_obstacles = []
+        person_count = 0
+        face_count = 0
+        for obj in objects:
+            label = str(obj.get("label", "object"))
+            zone = str(obj.get("zone", "unknown"))
+            if zone not in object_zones:
+                zone = "unknown"
+            object_zones[zone].append(label)
+            if label == "person":
+                person_count += 1
+            if "face" in label:
+                face_count += 1
+            area_ratio = float(obj.get("area_ratio", 0.0) or 0.0)
+            if label in OBSTACLE_LABELS and area_ratio >= close_threshold:
+                close_obstacles.append({
+                    "label": label,
+                    "zone": zone,
+                    "area_ratio": round(area_ratio, 4),
+                    "confidence": obj.get("confidence"),
+                })
+        object_zones = {k: v[:5] for k, v in object_zones.items() if v}
+        attention = "clear"
+        if close_obstacles:
+            attention = "obstacle_close"
+        elif person_count or face_count:
+            attention = "person_visible"
+        elif motion.get("detected"):
+            attention = "motion_visible"
+        return {
+            "person_count": person_count,
+            "face_count": face_count,
+            "object_count": len(objects),
+            "object_zones": object_zones,
+            "close_obstacles": close_obstacles[:4],
+            "attention": attention,
+        }
+
+    def _summary(self, objects: list[dict[str, Any]], scene: dict[str, Any], motion: dict[str, Any]) -> str:
+        parts: list[str] = []
+        if objects:
+            visible = []
+            for obj in objects[:5]:
+                label = obj.get("label", "object")
+                zone = obj.get("zone", "unknown")
+                conf = obj.get("confidence")
+                conf_text = f" {float(conf):.2f}" if isinstance(conf, (int, float)) else ""
+                visible.append(f"{label} in {zone}{conf_text}")
+            parts.append("Objects: " + ", ".join(visible) + ".")
+        else:
+            detector_ready = self.object_detector.status().get("model_ready")
+            if detector_ready:
+                parts.append("No known objects detected in the current frame.")
+            else:
+                parts.append("Camera frame available; object model files are missing, so only motion/face fallback may work.")
+
+        if motion.get("detected"):
+            parts.append(f"Motion detected in the {motion.get('zone', 'unknown')} zone.")
+        else:
+            parts.append("No significant motion detected.")
+
+        close_obstacles = scene.get("close_obstacles") or []
+        if close_obstacles:
+            labels = ", ".join(f"{o.get('label')} in {o.get('zone')}" for o in close_obstacles[:3])
+            parts.append(f"Possible close obstacle: {labels}.")
+        return " ".join(parts)
 
     def _objects_confidence(self, objects: list[dict[str, Any]]) -> float:
         if not objects:
@@ -438,138 +497,6 @@ class BasicVisionAnalyzer:
             return max(float(obj.get("confidence", 0.0)) for obj in objects)
         except Exception:
             return 0.0
-
-    def _backend_with_objects(self, hand_backend: str) -> str:
-        detector_backend = self.object_detector.backend_name
-        if detector_backend and detector_backend != "disabled":
-            return f"{hand_backend}+{detector_backend}"
-        return hand_backend
-
-    def _analyze_with_opencv_contours(
-        self,
-        image,
-        cv2,
-        np,
-        now: float,
-        iso: str,
-        frame: dict[str, Any],
-        objects: list[dict[str, Any]],
-        reason: str,
-    ) -> VisionObservation:
-        height, width = image.shape[:2]
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # Wide skin-color range. This is not robust across lighting/skin tones, but is a no-model fallback.
-        lower1 = np.array([0, 25, 45], dtype=np.uint8)
-        upper1 = np.array([25, 255, 255], dtype=np.uint8)
-        lower2 = np.array([160, 25, 45], dtype=np.uint8)
-        upper2 = np.array([179, 255, 255], dtype=np.uint8)
-        mask = cv2.inRange(hsv, lower1, upper1) | cv2.inRange(hsv, lower2, upper2)
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            summary = self._combined_summary("No hand-like contour detected in the current camera frame.", objects)
-            return VisionObservation(
-                ok=True,
-                ts=now,
-                iso=iso,
-                backend=self._backend_with_objects("opencv-contour"),
-                summary=summary,
-                confidence=max(0.35, self._objects_confidence(objects)),
-                hand={"detected": False, "gesture": "none", "finger_count": None},
-                objects=objects,
-                frame=frame,
-                reason=reason,
-            )
-
-        contour = max(contours, key=cv2.contourArea)
-        area = float(cv2.contourArea(contour))
-        frame_area = float(width * height)
-        if area < frame_area * float(self.cfg.get("vision.min_hand_area_ratio", 0.015)):
-            summary = self._combined_summary("Only small hand-like contours detected; no reliable hand gesture yet.", objects)
-            return VisionObservation(
-                ok=True,
-                ts=now,
-                iso=iso,
-                backend=self._backend_with_objects("opencv-contour"),
-                summary=summary,
-                confidence=max(0.3, self._objects_confidence(objects)),
-                hand={"detected": False, "gesture": "none", "finger_count": None},
-                objects=objects,
-                frame={**frame, "largest_contour_area": round(area, 1)},
-                reason=reason,
-            )
-
-        hull_points = cv2.convexHull(contour)
-        hull_area = float(cv2.contourArea(hull_points)) if hull_points is not None else 0.0
-        solidity = area / hull_area if hull_area > 0 else 0.0
-        x, y, w, h = cv2.boundingRect(contour)
-
-        defects_count = 0
-        try:
-            hull_indices = cv2.convexHull(contour, returnPoints=False)
-            if hull_indices is not None and len(hull_indices) >= 4:
-                defects = cv2.convexityDefects(contour, hull_indices)
-                if defects is not None:
-                    for i in range(defects.shape[0]):
-                        s, e, f, depth = defects[i, 0]
-                        start = contour[s][0]
-                        end = contour[e][0]
-                        far = contour[f][0]
-                        a = math.dist(start, end)
-                        b = math.dist(start, far)
-                        c = math.dist(end, far)
-                        if b <= 1e-6 or c <= 1e-6:
-                            continue
-                        angle = math.degrees(math.acos(max(-1.0, min(1.0, (b * b + c * c - a * a) / (2 * b * c)))))
-                        if angle < 90 and depth > 9000:
-                            defects_count += 1
-        except Exception:
-            defects_count = 0
-
-        finger_count = max(0, min(5, defects_count + 1 if defects_count > 0 else 0))
-        aspect = h / max(w, 1)
-        if defects_count == 0 and solidity > 0.78:
-            gesture = "fist"
-            finger_count = 0
-        elif finger_count >= 4:
-            gesture = "open_palm"
-        elif aspect > 1.45 and finger_count <= 1:
-            gesture = "thumbs_up_or_one_finger"
-            finger_count = max(finger_count, 1)
-        elif finger_count > 0:
-            gesture = f"{finger_count}_fingers"
-        else:
-            gesture = "uncertain_hand"
-            finger_count = None
-
-        confidence = 0.48 if gesture in {"fist", "open_palm"} else 0.38
-        hand = {
-            "detected": True,
-            "gesture": gesture,
-            "finger_count": finger_count,
-            "solidity": round(solidity, 3),
-            "bounding_box": [int(x), int(y), int(w), int(h)],
-            "defects_count": int(defects_count),
-        }
-        hand_summary = self._hand_summary(gesture, finger_count, confidence)
-        if gesture == "thumbs_up_or_one_finger":
-            hand_summary = "One hand-like contour detected: possibly thumbs-up or one raised finger. Confidence is low without MediaPipe."
-        summary = self._combined_summary(hand_summary, objects)
-        return VisionObservation(
-            ok=True,
-            ts=now,
-            iso=iso,
-            backend=self._backend_with_objects("opencv-contour"),
-            summary=summary,
-            confidence=max(confidence, self._objects_confidence(objects)),
-            hand=hand,
-            objects=objects,
-            frame={**frame, "largest_contour_area": round(area, 1)},
-            reason=reason,
-        )
 
 
 class ObjectDetector:

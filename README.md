@@ -319,55 +319,50 @@ The same data is written into `logs/voicepi.jsonl` with source `robot`.
 
 ---
 
-## v4 camera + basic vision layer
+## v4 camera + scene-awareness vision layer
 
-This build adds a Raspberry Pi camera service without removing the existing STT, TTS, LLM chat, or ESP32 robot-control layer.
+This build adds a Raspberry Pi camera service without removing the existing STT, TTS, LLM chat, memory or ESP32 robot-control layer.
 
-### What was added
+### What is included
 
 - Picamera2 integration inside the Flask app.
 - Live MJPEG stream in the web control panel.
 - `/camera/stream.mjpg` for the live stream.
 - `/camera/snapshot.jpg` for the latest frame.
 - `/camera/status` for camera + vision status.
-- A new Camera / Vision panel with:
-  - live camera window,
-  - current observation,
-  - timestamped vision logs,
-  - manual “Analyze current frame” button.
-- Basic hand/gesture observations are attached to the LLM prompt as `[CAMERA OBSERVATION]`, so questions like “How many fingers am I showing?” can be answered from the latest analyzed frame.
-- The robot planner also receives the camera observation, so gesture-conditioned commands can work, for example: “If I show a fist, stop; if I show thumbs up, move forward.”
+- A Camera / Vision panel with live camera, current observation and manual “Analyze current frame”.
+- Local scene awareness in `voicepi/vision.py`: object detection, rough left/center/right zones, motion detection and possible close-obstacle hints.
+- Camera observations are attached to the LLM prompt as `[CAMERA OBSERVATION]`, so the robot can answer questions like “What do you see?” or “Is there something moving?”
 
 ### Important architecture note
 
-The bundled local Qwen GGUF model is a text-only LLM. It cannot directly see pixels. The new `voicepi/vision.py` service converts the camera frame into concise structured text first, such as:
+The bundled local Qwen GGUF model is a text-only LLM. It cannot directly see pixels. The `voicepi/vision.py` service converts the camera frame into concise structured text first, such as:
 
 ```text
-summary=One hand detected: open palm, about 5 fingers visible.
-gesture=open_palm
-finger_count=5
+summary=Objects: person in center 0.82, bottle in left 0.66. Motion detected in the right zone.
+scene={'person_count': 1, 'close_obstacles': [], 'object_zones': {'center': ['person'], 'left': ['bottle']}, 'attention': 'person_visible'}
+objects=[{'label': 'person', 'confidence': 0.82, 'zone': 'center', 'area_ratio': 0.18}]
+motion={'detected': True, 'zone': 'right', 'changed_area_ratio': 0.024}
 confidence=0.82
 ```
 
-The LLM then reasons over that observation. This keeps the system light enough for a Raspberry Pi 5. If you later want richer object recognition, replace or extend `BasicHandVisionAnalyzer` with a stronger local vision model, and keep the same `[CAMERA OBSERVATION]` interface.
+The LLM then reasons over that observation. This keeps the system light enough for a Raspberry Pi 5 and gives you a strong base for later navigation, person-aware interaction and safety behavior.
 
 ### Camera dependencies on Raspberry Pi OS
 
-Picamera2 is normally installed through apt, not pip. The installer now installs the apt camera/OpenCV packages and creates the venv with `--system-site-packages` so the app can import them:
+Picamera2 is normally installed through apt, not pip. The installer installs the apt camera/OpenCV packages and creates the venv with `--system-site-packages` so the app can import them:
 
 ```bash
 sudo apt-get install -y python3-picamera2 python3-opencv python3-numpy
 python3 -m venv --system-site-packages .venv
 ```
 
-If you already have an old `.venv` that cannot import `picamera2`, recreate it:
+If you already have an old `.venv` that cannot import `picamera2` or `cv2`, recreate it:
 
 ```bash
 rm -rf .venv
 ./scripts/install_pi.sh
 ```
-
-Optional: install MediaPipe if your Python/Raspberry Pi OS combination supports it. The vision service will automatically use it for better finger counting and gesture recognition. If MediaPipe is not available, it falls back to a lower-confidence OpenCV contour heuristic.
 
 ### Config block
 
@@ -381,34 +376,29 @@ camera:
 
 vision:
   enabled: true
-  poll_interval_s: 1.0
+  poll_interval_s: 2.0
   snapshot_on_turn: true
   always_attach_to_prompt: true
-  max_prompt_age_s: 2.5
-  max_hands: 1
-  min_detection_confidence: 0.55
-  min_tracking_confidence: 0.5
-  min_hand_area_ratio: 0.015
+  max_prompt_age_s: 3.0
+  log_poll_observations: false
+  obstacle_area_ratio: 0.10
+  motion:
+    enabled: true
+    threshold: 24
+    min_area_ratio: 0.01
+  object_detection:
+    enabled: true
+    model_path: "models/vision/mobilenet_iter_73000.caffemodel"
+    config_path: "models/vision/deploy.prototxt"
+    confidence_threshold: 0.45
+    max_objects: 6
 ```
 
-### Faster thinking defaults
+Download the small object detector files:
 
-The default config now favors faster voice interaction:
-
-```yaml
-assistant:
-  visible_rationale: false
-llm:
-  n_ctx: 1536
-  n_batch: 256
-  temperature: 0.35
-  max_tokens: 140
-robot:
-  planner_max_tokens: 80
-  fast_intent_gate: true
+```bash
+python scripts/download_models.py --skip-llm --skip-stt --skip-tts --vision mobilenet-ssd
 ```
-
-`fast_intent_gate` does not execute commands by keyword. It only skips the expensive robot-planner LLM call for normal chat that clearly is not robot/gesture related. Robot movement is still decided by the LLM planner and still clamped by the safety layer.
 
 ### Test prompts
 
@@ -416,9 +406,9 @@ Type or say:
 
 ```text
 What does the camera see?
-How many fingers am I showing?
-If I show a fist, stop the robot.
-If I show thumbs up, move forward.
+Is there a person in front of you?
+Do you see any close obstacle?
+Where is the moving object?
 ```
 
 For the first tests, keep the robot wheels lifted off the table and keep `robot.enabled: false` until you trust the camera and ESP32 path.

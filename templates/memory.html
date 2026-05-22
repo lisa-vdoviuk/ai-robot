@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ assistant_name }} · Memory</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>{{ assistant_name }} memory</h1>
+      <p>Local SQLite memory: durable facts, episodic recall and rolling summaries.</p>
+    </div>
+    <div class="status">
+      <a class="buttonLike" href="{{ url_for('index') }}">Dashboard</a>
+      <span id="memoryBadge" class="badge {{ 'ok' if memory_enabled else 'danger' }}">memory: {{ 'enabled' if memory_enabled else 'disabled' }}</span>
+    </div>
+  </header>
+
+  <main class="memoryLayout">
+    <section class="card memoryHero">
+      <div>
+        <h2>What the robot currently remembers</h2>
+        <p class="hint">User id: <code id="memoryUserId">{{ memory_user_id }}</code>. This page reads the same local database that is injected into the LLM prompt.</p>
+      </div>
+      <div class="row">
+        <button id="refreshMemory" class="primary" type="button">Refresh memory</button>
+      </div>
+    </section>
+
+    <section class="card memoryStats">
+      <h2>Stats</h2>
+      <div class="statGrid">
+        <div><span class="statValue" id="factCount">—</span><span class="statLabel">facts</span></div>
+        <div><span class="statValue" id="episodeCount">—</span><span class="statLabel">episodes</span></div>
+        <div><span class="statValue" id="summaryCount">—</span><span class="statLabel">summaries</span></div>
+        <div><span class="statValue" id="ftsState">—</span><span class="statLabel">FTS5</span></div>
+      </div>
+    </section>
+
+    <section class="card memoryFacts">
+      <h2>Durable profile facts</h2>
+      <div id="factsList" class="memoryList empty">No facts loaded yet.</div>
+    </section>
+
+    <section class="card memorySummary">
+      <h2>Rolling summary</h2>
+      <pre id="latestSummary" class="memoryBox">No summary loaded yet.</pre>
+    </section>
+
+    <section class="card memoryRecent">
+      <h2>Recent episodic memory</h2>
+      <div id="recentList" class="memoryList empty">No episodes loaded yet.</div>
+    </section>
+
+    <section class="card memoryRecall">
+      <h2>Search recall</h2>
+      <form id="recallForm" class="manual">
+        <input id="recallQuery" placeholder="Search what the robot would recall for a future question…" />
+        <button>Search</button>
+      </form>
+      <div id="recallList" class="memoryList empty">No search yet.</div>
+      <h3>Prompt memory preview</h3>
+      <pre id="contextPreview" class="memoryBox">No context preview yet.</pre>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='memory.js') }}"></script>
+</body>
+</html>

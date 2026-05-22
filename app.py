@@ -8,7 +8,7 @@ import threading
 import uuid
 from typing import Any
 
-from flask import Flask, Response, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
 from voicepi.camera import CameraManager
@@ -130,6 +130,51 @@ def create_app(cfg: Config) -> Flask:
             audio_chunk_ms=cfg.get("client.audio_chunk_ms", 80),
             sample_rate=cfg.get("stt.sample_rate", 16000),
         )
+
+
+    @app.get("/memory")
+    def memory_page():
+        return render_template(
+            "memory.html",
+            assistant_name=cfg.get("assistant.name", "VoicePi"),
+            memory_enabled=memory_store is not None,
+            memory_user_id=cfg.get("memory.user_id", "default"),
+        )
+
+    @app.get("/memory/data")
+    def memory_data():
+        if memory_store is None:
+            return jsonify({"ok": False, "enabled": False, "error": "memory disabled"})
+        user_id = str(request.args.get("user_id") or cfg.get("memory.user_id", "default"))
+        query = str(request.args.get("q") or "").strip()
+        try:
+            recent_n = max(1, min(50, int(request.args.get("recent", 12))))
+        except Exception:
+            recent_n = 12
+        try:
+            facts = memory_store.get_facts(user_id=user_id, min_confidence=0.0)
+            recent = memory_store.recent(recent_n, user_id=user_id)
+            recalled = memory_store.recall(query, k=8, user_id=user_id) if query else []
+            context_preview = memory_store.build_context_block(
+                query or (recent[-1]["user_text"] if recent else ""),
+                user_id=user_id,
+                max_facts=int(cfg.get("memory.max_facts", 8)),
+                k_recall=int(cfg.get("memory.recall_k", 3)),
+            )
+            return jsonify({
+                "ok": True,
+                "enabled": True,
+                "user_id": user_id,
+                "stats": memory_store.stats(user_id=user_id),
+                "facts": facts,
+                "latest_summary": memory_store.latest_summary(user_id=user_id),
+                "recent": recent,
+                "recalled": recalled,
+                "context_preview": context_preview,
+            })
+        except Exception as exc:
+            logger.event("memory", "error", f"memory dashboard failed: {exc}")
+            return jsonify({"ok": False, "enabled": True, "error": str(exc)}), 500
 
     @app.get("/health")
     def health():

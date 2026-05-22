@@ -469,9 +469,8 @@ class ConversationSession:
         keywords = [
             "move", "drive", "go", "forward", "backward", "reverse", "left", "right", "turn",
             "stop", "halt", "freeze", "wait", "motor", "wheel", "robot", "esp32",
-            "fist", "thumb", "thumbs", "finger", "gesture", "palm",
             "рух", "їд", "вперед", "назад", "ліворуч", "праворуч", "повер",
-            "зупин", "стоп", "мотор", "колес", "робот", "кулак", "палець", "пальц", "жест", "долон",
+            "зупин", "стоп", "мотор", "колес", "робот",
         ]
         return any(k in text for k in keywords)
 

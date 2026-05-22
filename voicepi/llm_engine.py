@@ -30,7 +30,7 @@ Rules:
 - Use action "none" for questions, greetings, code help, explanations, ambiguous speech, or anything not commanding the robot.
 - "left" and "right" mean turn in place.
 - The latest user message may include a [CAMERA OBSERVATION] block. Treat it as sensor input from the robot camera.
-- If the user gives a gesture-conditioned command and the camera observation confirms that gesture, execute the matching action. Example: if the user says a fist means stop and the observation says gesture=fist, return action "stop". If the user says thumbs-up means go/drive and the observation says gesture=thumbs_up, return a short forward move.
+- If the latest camera observation reports a close obstacle and the user asks to move toward it, prefer action "none" or "stop" with a safety reason.
 - Never execute motion from vision alone; it must match the user's current instruction or a clear active condition in the latest message.
 - Keep durations short for safety. If the user says "a little", use 350-600 ms. If unspecified, use about 700 ms.
 - If uncertain, choose "none" with confidence below 0.55.
@@ -79,7 +79,7 @@ class LLMEngine:
             system_prompt += """
 
 You may receive a [CAMERA OBSERVATION] note from the robot camera. Treat it as current but imperfect sensor input.
-Use it to answer visual questions, count visible fingers, and explain gestures. If confidence is low, say that briefly.
+Use it to answer visual questions about visible objects, people, rough left/center/right zones, motion and possible close obstacles. If confidence is low, say that briefly.
 Do not claim to see details that are not present in the observation.
 """
 
