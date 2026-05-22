@@ -1,0 +1,150 @@
+server:
+  host: "0.0.0.0"
+  # Browser microphone access from another device usually requires HTTPS.
+  # Use https://<raspberry-pi-ip>:5443 and accept the self-signed certificate.
+  port: 5443
+  https: true
+  certfile: null
+  keyfile: null
+  secret_key: "change-me-local-dev"
+
+assistant:
+  name: "Orion"
+  language: "en"
+  max_history_turns: 8
+  # Turn this on only while debugging. False is faster because the model does not
+  # need to generate XML rationale before the spoken answer.
+  visible_rationale: false
+  system_prompt: |
+    You are Orion, a local voice-first AI companion running on a Raspberry Pi.
+    Speak English only.
+
+    Be a smart, natural conversational partner: helpful, calm, concise, and context-aware.
+    Keep spoken answers short: usually 1-3 sentences, unless the user asks for detail.
+    The user transcript comes from speech recognition and may contain errors. If the text is too short,
+    garbled, or ambiguous, ask a brief clarification instead of pretending you understood.
+
+    The robot may provide camera observations, robot tool results, and logs. Treat them as sensor/tool context.
+
+stt:
+  engine: "vosk"
+  sample_rate: 16000
+  # Quality default: better English model than the tiny 40 MB one, still feasible on Raspberry Pi 5.
+  # For maximum speed, switch to models/vosk/vosk-model-small-en-us-0.15 and run download_models.py --stt small.
+  model_path: "models/vosk/vosk-model-en-us-0.22-lgraph"
+  min_final_chars: 2
+  min_final_words: 1
+  reject_phrases:
+    - "um"
+    - "uh"
+    - "hmm"
+    - "mm"
+    - "noise"
+
+llm:
+  engine: "llama_cpp"
+  # Quality default: 3B Q4_K_M. For faster responses on a hot/throttled Pi, use the 1.5B profile in README.
+  model_path: "models/llm/qwen2.5-3b-instruct-q4_k_m.gguf"
+  chat_format: "chatml"
+  n_ctx: 1536
+  n_threads: 4
+  n_batch: 256
+  n_gpu_layers: 0
+  temperature: 0.35
+  top_p: 0.9
+  repeat_penalty: 1.08
+  max_tokens: 140
+  stop:
+    - "<|im_end|>"
+
+# Optional automatic clarification for very suspicious STT output.
+quality_guard:
+  enabled: true
+  min_words_for_direct_answer: 2
+  ask_clarification_for_single_word: true
+
+tts:
+  engine: "piper"
+  # Leave as "piper" if installed through pip. You can also put an absolute path.
+  piper_bin: "piper"
+  # More pleasant default voice profile downloaded by scripts/download_models.py --tts amy-high.
+  # If you keep the old Ryan voice, set these back to en_US-ryan-high.
+  model_path: "models/piper/en_US-amy-high.onnx"
+  config_path: "models/piper/en_US-amy-high.onnx.json"
+  speaker_id: null
+  # Slightly slower than 1.0 usually sounds less rushed.
+  length_scale: 1.08
+  # Optional Piper controls. These are conservative; change only if the voice sounds unstable.
+  noise_scale: 0.55
+  noise_w: 0.75
+  sentence_silence: 0.08
+  normalize_text: true
+  # Larger chunks reduce audible gaps between generated WAVs.
+  sentence_min_chars: 42
+  sentence_max_chars: 260
+  coalesce_wait_s: 0.18
+  chunk_max_chars: 320
+  join_timeout_s: 120
+
+logging:
+  jsonl_path: "logs/voicepi.jsonl"
+  console: true
+
+camera:
+  # Uses Picamera2 and serves /camera/stream.mjpg plus /camera/snapshot.jpg.
+  enabled: true
+  width: 640
+  height: 480
+
+vision:
+  # Basic local vision: MediaPipe Hands if installed, otherwise lower-confidence OpenCV contours.
+  # Object detection uses OpenCV DNN + MobileNet-SSD when models/vision files are present.
+  enabled: true
+  poll_interval_s: 1.0
+  snapshot_on_turn: true
+  always_attach_to_prompt: true
+  max_prompt_age_s: 2.5
+  max_hands: 1
+  min_detection_confidence: 0.55
+  min_tracking_confidence: 0.5
+  min_hand_area_ratio: 0.015
+  object_detection:
+    enabled: true
+    model_path: "models/vision/mobilenet_iter_73000.caffemodel"
+    config_path: "models/vision/deploy.prototxt"
+    confidence_threshold: 0.45
+    max_objects: 6
+
+client:
+  vad_threshold: 0.018
+  # Higher threshold while the assistant is speaking to avoid cancelling itself from speaker echo.
+  barge_in_threshold: 0.045
+  vad_hold_ms: 650
+  min_speech_ms: 180
+  preroll_ms: 450
+  audio_chunk_ms: 80
+
+robot:
+  # Set true when the ESP32 firmware in esp32/voicepi_motor_controller.ino is running.
+  enabled: false
+  # Use the IP printed in the ESP32 Serial Monitor after it connects to Wi-Fi.
+  base_url: "http://192.168.1.50"
+  token: "change-me-robot-token"
+  timeout_s: 2.0
+
+  # Safety clamps. The LLM may request a movement, but these hard limits win.
+  min_confidence: 0.55
+  min_speed: 0.20
+  max_speed: 0.75
+  default_speed: 0.45
+  min_duration_ms: 150
+  max_duration_ms: 1800
+  default_duration_ms: 700
+  planner_max_tokens: 80
+  # Speeds up normal chat: only run the LLM robot planner when the transcript looks robot/gesture-related.
+  # This gate never executes commands by itself; it only decides whether to ask the planner.
+  fast_intent_gate: true
+
+  # Emergency behavior.
+  stop_on_barge_in: true
+  stop_on_disconnect: true

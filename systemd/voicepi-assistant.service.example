@@ -1,0 +1,16 @@
+[Unit]
+Description=VoicePi local LLM voice assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/voicepi-llm-assistant-v2
+Environment=VOICEPI_CONFIG=config.yaml
+ExecStart=/home/pi/voicepi-llm-assistant-v2/.venv/bin/python /home/pi/voicepi-llm-assistant-v2/app.py --config config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ assistant_name }} · VoicePi</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>{{ assistant_name }}</h1>
+      <p>Local voice-first AI companion on Raspberry Pi</p>
+    </div>
+    <div class="status">
+      <span id="connBadge" class="badge warn">server: connecting…</span>
+      <span id="micBadge" class="badge">microphone: off</span>
+      <span id="talkBadge" class="badge">dialogue: idle</span>
+      <span id="cameraBadge" class="badge">camera: checking…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card controls">
+      <h2>Dialogue</h2>
+      <div class="row">
+        <button id="startBtn" class="primary">Start dialogue</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="interruptBtn" disabled>Interrupt</button>
+      </div>
+      <div class="meters">
+        <label>Microphone level</label>
+        <progress id="micMeter" value="0" max="1"></progress>
+      </div>
+      <form id="manualForm" class="manual">
+        <input id="manualText" placeholder="Or type a test message without using the microphone…" />
+        <button>Send</button>
+      </form>
+      <details>
+        <summary>Client VAD settings</summary>
+        <label>Voice threshold <input id="vadThreshold" type="number" step="0.001" min="0.001" max="0.2" value="{{ vad_threshold }}" /></label>
+        <label>Barge-in threshold <input id="bargeInThreshold" type="number" step="0.001" min="0.001" max="0.2" value="{{ barge_in_threshold }}" /></label>
+        <label>Silence hold, ms <input id="vadHold" type="number" step="50" min="100" max="2000" value="{{ vad_hold_ms }}" /></label>
+        <label>Minimum speech, ms <input id="minSpeechMs" type="number" step="20" min="40" max="1000" value="{{ min_speech_ms }}" /></label>
+      </details>
+      <p class="hint">When the assistant is speaking, start talking to interrupt. The browser uses a higher barge-in threshold to avoid cancelling itself from speaker echo.</p>
+    </section>
+
+    <section class="card camera">
+      <h2>Camera / Vision</h2>
+      <div class="cameraStatus">
+        <span id="visionBadge" class="badge">vision: idle</span>
+        <span class="hint">MJPEG stream from the Raspberry Pi camera</span>
+      </div>
+      <div class="cameraFrameWrap">
+        <img id="cameraStream" src="{{ url_for('camera_stream') }}" alt="Raspberry Pi camera stream" />
+      </div>
+      <div class="row cameraActions">
+        <button id="refreshVision" type="button">Analyze current frame</button>
+        <a class="buttonLike" href="{{ url_for('camera_snapshot') }}" target="_blank" rel="noreferrer">Open snapshot</a>
+      </div>
+      <h3>Current observation</h3>
+      <pre id="visionCurrent" class="visionBox">No vision observation yet.</pre>
+      <h3>Vision log</h3>
+      <pre id="visionLogs" class="visionBox small"></pre>
+    </section>
+
+    <section class="card transcript">
+      <h2>Transcript</h2>
+      <div id="conversation" class="conversation"></div>
+      <div id="partial" class="partial"></div>
+    </section>
+
+    <section class="card xai">
+      <h2>Explainable AI / Trace</h2>
+      <div class="tabs">
+        <button data-tab="rationale" class="tab active">visible rationale</button>
+        <button data-tab="raw" class="tab">raw LLM</button>
+        <button data-tab="metrics" class="tab">metrics</button>
+        <button data-tab="prompt" class="tab">prompt</button>
+        <button data-tab="robot" class="tab">robot tools</button>
+      </div>
+      <pre id="xaiRationale" class="tabPanel"></pre>
+      <pre id="xaiRaw" class="tabPanel hidden"></pre>
+      <pre id="xaiMetrics" class="tabPanel hidden"></pre>
+      <pre id="xaiPrompt" class="tabPanel hidden"></pre>
+      <pre id="xaiRobot" class="tabPanel hidden"></pre>
+    </section>
+
+    <section class="card logs">
+      <div class="logHeader">
+        <h2>Logs</h2>
+        <button id="clearLogs">Clear</button>
+      </div>
+      <pre id="logs"></pre>
+    </section>
+  </main>
+
+  <script>
+    window.VOICEPI = {
+      sampleRate: {{ sample_rate }},
+      vadThreshold: {{ vad_threshold }},
+      bargeInThreshold: {{ barge_in_threshold }},
+      vadHoldMs: {{ vad_hold_ms }},
+      minSpeechMs: {{ min_speech_ms }},
+      prerollMs: {{ preroll_ms }},
+      audioChunkMs: {{ audio_chunk_ms }}
+    };
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

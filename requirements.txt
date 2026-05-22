@@ -1,0 +1,11 @@
+Flask>=3.0.0
+Flask-Sock>=0.7.0
+simple-websocket>=1.0.0
+PyYAML>=6.0.1
+vosk>=0.3.45
+piper-tts>=1.4.2
+llama-cpp-python>=0.3.8
+huggingface_hub>=0.23.0
+requests>=2.31.0
+pyOpenSSL>=24.0.0
+tqdm>=4.66.0
