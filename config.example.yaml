@@ -69,8 +69,8 @@ tts:
   piper_bin: "piper"
   # More pleasant default voice profile downloaded by scripts/download_models.py --tts amy-high.
   # If you keep the old Ryan voice, set these back to en_US-ryan-high.
-  model_path: "models/piper/en_US-amy-high.onnx"
-  config_path: "models/piper/en_US-amy-high.onnx.json"
+  model_path: "models/piper/en_US-amy-medium.onnx"
+  config_path: "models/piper/en_US-amy-medium.onnx.json"
   speaker_id: null
   # Slightly slower than 1.0 usually sounds less rushed.
   length_scale: 1.08
