@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import Any
 
+from .decision_manager import evaluate_robot_command
 from .memory import MemoryStore, extract_facts
 from .robot_controller import RobotCommand, RobotController
 from .stt_vosk import VoskStreamSTT
@@ -121,6 +122,7 @@ class ConversationSession:
                 self.log("session", "info", "generation cancelled", reason=reason)
                 # If the user interrupts while the robot is moving, stop the motors too.
                 if bool(self.cfg.get("robot.stop_on_barge_in", True)):
+
                     result = self.robot_controller.execute(RobotCommand(action="stop", reason=reason, confidence=1.0))
                     self.emit("robot_update", result.to_dict())
 
@@ -206,12 +208,17 @@ class ConversationSession:
                 elapsed = time.perf_counter() - started
                 if cancel_event.is_set() or not wav:
                     return
+                audio_b64 = base64.b64encode(wav).decode("ascii")
+                mime_type = getattr(self.tts_engine, "mime_type", "audio/wav")
+
                 self.emit(
                     "tts_audio",
                     {
                         "turn_id": turn_id,
                         "text": text,
-                        "wav_b64": base64.b64encode(wav).decode("ascii"),
+                        "audio_b64": audio_b64,
+                        "wav_b64": audio_b64,
+                        "mime_type": mime_type,
                     },
                 )
                 self.log("tts", "info", "audio synthesized", chars=len(text), elapsed_s=round(elapsed, 3))
@@ -548,6 +555,32 @@ class ConversationSession:
             command = RobotCommand.from_planner_dict(planner_raw, self.cfg)
             self.emit("robot_update", {"planner": planner_raw, "command": command.to_dict()})
             self.log("robot", "info", "planner completed", planner=planner_raw, command=command.to_dict())
+            latest_vision = self.vision_service.latest() if self.vision_service else None
+            decision = evaluate_robot_command(command, latest_vision, self.cfg)
+
+            self.emit("robot_update", {
+                "decision": decision,
+                "command": command.to_dict(),
+            })
+
+            self.log(
+                "decision",
+                "info" if decision.get("allowed") else "warning",
+                "robot action safety decision",
+                decision=decision,
+                command=command.to_dict(),
+            )
+
+            if not decision.get("allowed", False):
+                blocked_result = {
+                    "ok": True,
+                    "skipped": True,
+                    "command": command.to_dict(),
+                    "response": "blocked by decision manager",
+                    "decision": decision,
+                }
+                self.emit("robot_update", blocked_result)
+                return f"Robot command blocked by safety decision manager. Decision: {decision}."
             result = self.robot_controller.execute(command)
             result_dict = result.to_dict()
             self.emit("robot_update", result_dict)

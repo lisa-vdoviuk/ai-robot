@@ -7,6 +7,7 @@ import os
 import threading
 import uuid
 from typing import Any
+from voicepi.tts_kokoro import KokoroTTS
 
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
@@ -56,8 +57,14 @@ def create_app(cfg: Config) -> Flask:
 
     logger.event("boot", "info", "loading LLM")
     llm_engine = LLMEngine(cfg)
-    logger.event("boot", "info", "loading TTS")
-    tts_engine = PiperTTS(cfg)
+    logger.event("boot", "info", "loading TTS", engine=cfg.get("tts.engine", "piper"))
+
+    tts_engine_name = str(cfg.get("tts.engine", "piper")).strip().lower()
+
+    if tts_engine_name == "kokoro":
+        tts_engine = KokoroTTS(cfg)
+    else:
+        tts_engine = PiperTTS(cfg)
     robot_controller = RobotController(cfg)
     if robot_controller.enabled:
         logger.event("boot", "info", "robot controller enabled", base_url=robot_controller.base_url)

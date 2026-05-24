@@ -81,34 +81,56 @@ quality_guard:
   ask_clarification_for_single_word: true
 
 tts:
-  engine: "piper"
-  piper_bin: "piper"
+  # Варіанти:
+  # kokoro - якісніший безкоштовний локальний TTS
+  # piper  - швидший і стабільніший fallback
+  engine: "kokoro"
 
-  model_path: "models/piper/en_US-amy-medium.onnx"
-  config_path: "models/piper/en_US-amy-medium.onnx.json"
-
-  speaker_id: null
-  length_scale: 1.08
-  noise_scale: 0.45
-  noise_w: 0.55
-  sentence_silence: 0.25
   normalize_text: true
 
-  # Важливо для Raspberry Pi:
-  # false = не запускати Piper паралельно з локальною LLM.
+  # Groq вже швидкий, тому краще не стрімити TTS під час генерації.
   stream_during_generation: false
 
-  sentence_min_chars: 40
-  sentence_max_chars: 180
+  # Для Kokoro краще озвучувати відповідь цілком або великими шматками.
+  sentence_min_chars: 60
+  sentence_max_chars: 260
+  chunk_max_chars: 320
   coalesce_wait_s: 0.05
-  chunk_max_chars: 220
 
-  synth_timeout_s: 18
-  join_timeout_s: 30
+  synth_timeout_s: 35
+  join_timeout_s: 45
+  playback_gap_ms: 120
 
-logging:
-  jsonl_path: "logs/voicepi.jsonl"
-  console: true
+  kokoro:
+    # a = American English
+    # b = British English
+    lang_code: "a"
+
+    # Хороший стартовий voice.
+    # Якщо не сподобається, потім спробуємо af_bella / af_nicole / am_adam.
+    voice: "af_heart"
+
+    sample_rate: 24000
+
+  # Piper fallback
+  piper_bin: "piper"
+  model_path: "models/piper/en_US-lessac-medium.onnx"
+  config_path: "models/piper/en_US-lessac-medium.onnx.json"
+  speaker_id: null
+  length_scale: 1.12
+  noise_scale: 0.45
+  noise_w: 0.55
+  sentence_silence: 0.28
+
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+    model: "gpt-4o-mini-tts"
+    voice: "nova"
+    response_format: "mp3"
+    speed: 1.0
+    instructions: "Speak naturally, warmly, and clearly. Use short pauses between sentences."
+    timeout_s: 25
 
 memory:
   enabled: true
@@ -142,12 +164,10 @@ camera:
 vision:
   enabled: true
 
-  # Важливо: не ганяємо computer vision у фоні.
-  # Камера і manual Analyze залишаються.
+  # YOLO не ганяємо постійно у фоні на високій частоті.
   poll_enabled: false
-  poll_interval_s: 10.0
+  poll_interval_s: 8.0
 
-  # Не чіпаємо камеру на кожну звичайну репліку.
   snapshot_on_turn: true
   always_attach_to_prompt: false
   max_prompt_age_s: 8.0
@@ -162,10 +182,16 @@ vision:
 
   object_detection:
     enabled: true
-    model_path: "models/vision/mobilenet_iter_73000.caffemodel"
-    config_path: "models/vision/deploy.prototxt"
-    confidence_threshold: 0.45
-    max_objects: 4
+
+    # Варіанти: "yolo", "mobilenet"
+    backend: "yolo"
+
+    # Ultralytics може завантажити yolo11n.pt автоматично при першому запуску.
+    model_path: "yolo11n.pt"
+
+    imgsz: 416
+    confidence_threshold: 0.35
+    max_objects: 8
 
 client:
   vad_threshold: 0.018

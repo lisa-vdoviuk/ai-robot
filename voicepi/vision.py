@@ -207,13 +207,14 @@ class VisionService:
         return ""
 
     def status(self) -> dict[str, Any]:
-        latest = self.latest()
         return {
             "enabled": self.enabled,
-            "poll_enabled": self.poll_enabled,
-            "backend": self.analyzer.backend_name,
-            "object_detector": self.analyzer.object_detector.status(),
-            "latest": latest.to_dict() if latest else None,
+            "backend": self.backend_name,
+            "mode": self.backend,
+            "model_path": str(self.model_path),
+            "config_path": str(self.config_path),
+            "model_ready": self.backend == "yolo" or self.model_path.exists(),
+            "error": self._load_error,
         }
 
     def _loop(self) -> None:
@@ -524,6 +525,9 @@ class ObjectDetector:
         self._load_error: str | None = None
         self._haar_loaded = False
         self._face_cascade = None
+        self.backend = str(cfg.get("vision.object_detection.backend", "mobilenet")).strip().lower()
+        self.yolo_imgsz = int(cfg.get("vision.object_detection.imgsz", 416))
+        self._yolo = None
 
     def status(self) -> dict[str, Any]:
         return {
@@ -538,11 +542,69 @@ class ObjectDetector:
     def detect(self, image, cv2, np) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
+
+        if self.backend == "yolo":
+            yolo_objects = self._detect_with_yolo(image)
+            if yolo_objects:
+                return yolo_objects
+
         dnn_objects = self._detect_with_dnn(image, cv2, np)
         if dnn_objects:
             return dnn_objects
-        return self._detect_fallback_faces(image, cv2)
 
+        return self._detect_fallback_faces(image, cv2)
+    def _detect_with_yolo(self, image) -> list[dict[str, Any]]:
+        try:
+            if self._yolo is None:
+                from ultralytics import YOLO  # type: ignore
+
+                self._yolo = YOLO(str(self.model_path))
+                self.backend_name = "ultralytics-yolo"
+
+            results = self._yolo.predict(
+                image,
+                imgsz=self.yolo_imgsz,
+                conf=self.confidence_threshold,
+                max_det=self.max_objects,
+                verbose=False,
+                device="cpu",
+            )
+        except Exception as exc:
+            self._load_error = f"yolo failed: {exc}"
+            self.backend_name = "yolo-error"
+            return []
+
+        objects: list[dict[str, Any]] = []
+
+        try:
+            if not results:
+                return []
+
+            result = results[0]
+            names = getattr(result, "names", {}) or {}
+
+            for box in result.boxes:
+                xyxy = box.xyxy[0].detach().cpu().numpy().tolist()
+                conf = float(box.conf[0].detach().cpu().item())
+                cls_id = int(box.cls[0].detach().cpu().item())
+
+                label = names.get(cls_id, f"class_{cls_id}") if isinstance(names, dict) else f"class_{cls_id}"
+
+                x1, y1, x2, y2 = [int(v) for v in xyxy]
+
+                objects.append({
+                    "label": str(label),
+                    "confidence": round(conf, 3),
+                    "bbox": [x1, y1, x2, y2],
+                    "class_id": cls_id,
+                    "detector": "yolo",
+                })
+        except Exception as exc:
+            self._load_error = f"yolo parse failed: {exc}"
+            return []
+
+        objects.sort(key=lambda obj: float(obj.get("confidence", 0.0)), reverse=True)
+        return objects[: self.max_objects]
     def _detect_with_dnn(self, image, cv2, np) -> list[dict[str, Any]]:
         if not (self.model_path.exists() and self.config_path.exists()):
             self._load_error = "object model files are missing; run: python scripts/download_models.py --skip-llm --skip-stt --skip-tts --vision mobilenet-ssd"
