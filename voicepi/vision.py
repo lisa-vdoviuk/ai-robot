@@ -105,6 +105,7 @@ class VisionService:
         self.camera = camera
         self.logger = logger
         self.enabled = bool(cfg.get("vision.enabled", False))
+        self.poll_enabled = bool(cfg.get("vision.poll_enabled", True))
         self.poll_interval_s = float(cfg.get("vision.poll_interval_s", 2.0))
         self.max_prompt_age_s = float(cfg.get("vision.max_prompt_age_s", 3.0))
         self.snapshot_on_turn = bool(cfg.get("vision.snapshot_on_turn", True))
@@ -121,8 +122,14 @@ class VisionService:
     def start(self) -> None:
         if not self.enabled:
             return
+
+        if not self.poll_enabled:
+            self._log("vision", "info", "vision service enabled; background polling disabled")
+            return
+
         if self._thread and self._thread.is_alive():
             return
+
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="voicepi-vision", daemon=True)
         self._thread.start()
@@ -188,17 +195,22 @@ class VisionService:
         likely_visual = any(word in lower for word in vision_words)
 
         obs = self.latest()
-        fresh = bool(obs and (time.time() - obs.ts) <= self.max_prompt_age_s)
-        if self.snapshot_on_turn and (self.always_attach or likely_visual or not fresh):
+
+        if self.snapshot_on_turn and (self.always_attach or likely_visual):
             obs = self.analyze_now(reason="turn")
+
         if obs and (self.always_attach or likely_visual):
-            return obs.to_prompt_text()
+            fresh = (time.time() - obs.ts) <= self.max_prompt_age_s
+            if fresh or likely_visual:
+                return obs.to_prompt_text()
+
         return ""
 
     def status(self) -> dict[str, Any]:
         latest = self.latest()
         return {
             "enabled": self.enabled,
+            "poll_enabled": self.poll_enabled,
             "backend": self.analyzer.backend_name,
             "object_detector": self.analyzer.object_detector.status(),
             "latest": latest.to_dict() if latest else None,

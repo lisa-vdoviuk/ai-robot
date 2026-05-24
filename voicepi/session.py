@@ -222,6 +222,43 @@ class ConversationSession:
             if stop_after_chunk:
                 return
 
+    def _speak_text_once(self, turn_id: str, text: str, cancel_event: threading.Event) -> None:
+        """Low-load TTS mode: synthesize only after LLM generation has finished."""
+        text = clean_for_tts(text)
+
+        if not text or cancel_event.is_set():
+            return
+
+        try:
+            started = time.perf_counter()
+            wav = self.tts_engine.synthesize_wav(text, cancel_event=cancel_event)
+            elapsed = time.perf_counter() - started
+
+            if cancel_event.is_set() or not wav:
+                return
+
+            self.emit(
+                "tts_audio",
+                {
+                    "turn_id": turn_id,
+                    "text": text,
+                    "wav_b64": base64.b64encode(wav).decode("ascii"),
+                },
+            )
+
+            self.log(
+                "tts",
+                "info",
+                "audio synthesized",
+                chars=len(text),
+                elapsed_s=round(elapsed, 3),
+                mode="nonstreaming",
+            )
+
+        except Exception as exc:
+            if not cancel_event.is_set():
+                self.log("tts", "error", f"TTS error: {exc}", text=text[:120])
+
     def _run_turn(self, turn_id: str, user_text: str, cancel_event: threading.Event) -> None:
         started = time.perf_counter()
         self.emit("turn_start", {"turn_id": turn_id, "user_text": user_text})
@@ -244,19 +281,26 @@ class ConversationSession:
         messages = self.llm_engine.build_messages(self.history[:-1], guarded_text)
         self.log("llm", "info", "generation started", turn_id=turn_id, user_text=user_text)
 
+        stream_tts = bool(self.cfg.get("tts.stream_during_generation", True))
+
         sentence_buffer = SentenceBuffer(
             min_chars=int(self.cfg.get("tts.sentence_min_chars", 22)),
             max_chars=int(self.cfg.get("tts.sentence_max_chars", 220)),
         )
+
         answer_streamer = StreamingAnswerExtractor("answer")
-        tts_queue: queue.Queue[str | None] = queue.Queue(maxsize=16)
-        tts_thread = threading.Thread(
-            target=self._tts_worker,
-            args=(turn_id, tts_queue, cancel_event),
-            daemon=True,
-            name=f"voicepi-tts-{turn_id[:8]}",
-        )
-        tts_thread.start()
+        tts_queue: queue.Queue[str | None] | None = None
+        tts_thread: threading.Thread | None = None
+
+        if stream_tts:
+            tts_queue = queue.Queue(maxsize=16)
+            tts_thread = threading.Thread(
+                target=self._tts_worker,
+                args=(turn_id, tts_queue, cancel_event),
+                daemon=True,
+                name=f"voicepi-tts-{turn_id[:8]}",
+            )
+            tts_thread.start()
 
         raw_text = ""
         answer_progress_sent = 0
@@ -285,18 +329,25 @@ class ConversationSession:
                 if safe_new_answer:
                     streamed_answer_chars += len(safe_new_answer)
                     answer_progress_sent = streamed_answer_chars
-                    for sent in sentence_buffer.feed(safe_new_answer):
-                        self._enqueue_tts(tts_queue, sent, cancel_event)
+                    if stream_tts and tts_queue is not None:
+                        for sent in sentence_buffer.feed(safe_new_answer):
+                            self._enqueue_tts(tts_queue, sent, cancel_event)
             else:
-                for sent in sentence_buffer.feed(clean_for_tts(token)):
-                    self._enqueue_tts(tts_queue, sent, cancel_event)
+                cleaned = clean_for_tts(token)
+
+                if stream_tts and tts_queue is not None:
+                    for sent in sentence_buffer.feed(cleaned):
+                        self._enqueue_tts(tts_queue, sent, cancel_event)
+                else:
+                    sentence_buffer.feed(cleaned)
 
         try:
             metrics = self.llm_engine.stream_chat(messages, cancel_event=cancel_event, on_token=on_token)
         except Exception as exc:
             self.log("llm", "error", f"LLM error: {exc}")
             self.emit("turn_error", {"turn_id": turn_id, "error": str(exc)})
-            tts_queue.put(None)
+            if tts_queue is not None:
+                tts_queue.put(None)
             return
 
         raw_text = metrics["raw"]
@@ -308,25 +359,36 @@ class ConversationSession:
             rationale = ""
 
         final_tail = clean_for_tts(sentence_buffer.flush())
-        if final_tail:
-            self._enqueue_tts(tts_queue, final_tail, cancel_event)
-        # If no answer progress was streamed because the model missed tags, synthesize the final parsed answer.
-        if visible_rationale and answer_progress_sent == 0 and answer and not cancel_event.is_set():
-            fallback_buffer = SentenceBuffer(
-                min_chars=int(self.cfg.get("tts.sentence_min_chars", 22)),
-                max_chars=int(self.cfg.get("tts.sentence_max_chars", 220)),
-            )
-            for sent in fallback_buffer.feed(answer):
-                self._enqueue_tts(tts_queue, sent, cancel_event)
-            tail = fallback_buffer.flush()
-            if tail:
-                self._enqueue_tts(tts_queue, tail, cancel_event)
 
-        tts_queue.put(None)
-        join_timeout = float(self.cfg.get("tts.join_timeout_s", 120))
-        tts_thread.join(timeout=join_timeout)
-        if tts_thread.is_alive():
-            self.log("tts", "warning", "TTS worker did not finish before timeout", timeout_s=join_timeout)
+        if stream_tts and tts_queue is not None:
+            if final_tail:
+                self._enqueue_tts(tts_queue, final_tail, cancel_event)
+
+            if visible_rationale and answer_progress_sent == 0 and answer and not cancel_event.is_set():
+                fallback_buffer = SentenceBuffer(
+                    min_chars=int(self.cfg.get("tts.sentence_min_chars", 22)),
+                    max_chars=int(self.cfg.get("tts.sentence_max_chars", 220)),
+                )
+
+                for sent in fallback_buffer.feed(answer):
+                    self._enqueue_tts(tts_queue, sent, cancel_event)
+
+                tail = fallback_buffer.flush()
+                if tail:
+                    self._enqueue_tts(tts_queue, tail, cancel_event)
+
+            tts_queue.put(None)
+
+            join_timeout = float(self.cfg.get("tts.join_timeout_s", 30))
+
+            if tts_thread is not None:
+                tts_thread.join(timeout=join_timeout)
+
+                if tts_thread.is_alive():
+                    self.log("tts", "warning", "TTS worker did not finish before timeout", timeout_s=join_timeout)
+
+        else:
+            self._speak_text_once(turn_id, answer, cancel_event)
 
         elapsed = time.perf_counter() - started
         if cancel_event.is_set() or metrics.get("cancelled"):

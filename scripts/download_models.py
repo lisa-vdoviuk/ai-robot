@@ -30,6 +30,11 @@ LLM_PROFILES = {
         "qwen2.5-1.5b-instruct-q4_k_m.gguf",
         "~1.0 GB",
     ),
+    "tiny": (
+        "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        "~0.4 GB",
+    ),
 }
 
 PIPER_REPO = "rhasspy/piper-voices"
@@ -270,6 +275,8 @@ def main() -> None:
     print("\nDone. Check config.yaml paths if you changed profiles.", flush=True)
     if args.llm == "fast":
         print("Fast LLM path: models/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf", flush=True)
+    if args.llm == "tiny":
+        print("Tiny LLM path: models/llm/qwen2.5-0.5b-instruct-q4_k_m.gguf", flush=True)
     if args.stt == "small":
         print("Small STT path: models/vosk/vosk-model-small-en-us-0.15", flush=True)
     if args.tts == "ryan-medium":

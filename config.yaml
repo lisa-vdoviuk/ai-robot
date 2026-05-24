@@ -11,19 +11,19 @@ server:
 assistant:
   name: "Orion"
   language: "en"
-  max_history_turns: 4
+  max_history_turns: 3
   visible_rationale: false
   system_prompt: |
     You are Orion, a local voice-first AI companion running on a Raspberry Pi.
     Speak English only.
 
-    Be a smart, natural conversational partner: helpful, calm, concise, and context-aware.
-    Keep spoken answers very short: usually 1-2 sentences.
-    Use natural punctuation. Put a period after each sentence.
-    The user transcript comes from speech recognition and may contain errors. If the text is too short,
-    garbled, or ambiguous, ask a brief clarification instead of pretending you understood.
+    Keep answers short and natural: usually 1 sentence, maximum 2 sentences.
+    Use simple wording and clear punctuation.
+    The user transcript comes from speech recognition and may contain errors.
+    If the transcript is unclear, ask one short clarification.
 
-    The robot may provide camera observations, robot tool results, and logs. Treat them as sensor/tool context.
+    The robot may provide camera observations, robot tool results, and logs.
+    Treat them as sensor/tool context.
 
 stt:
   engine: "vosk"
@@ -41,29 +41,38 @@ stt:
     - "noise"
 
 llm:
-  engine: "llama_cpp"
-  model_path: "models/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf"
-  chat_format: "chatml"
+  engine: "groq"
 
-  # Менший контекст = менше RAM і швидший prompt prefill.
-  n_ctx: 1024
-
-  # 3 потоки замість 4: трохи повільніше за absolute max,
-  # але Raspberry Pi залишається живішою для camera, TTS, web UI.
-  n_threads: 3
-  n_batch: 128
-  n_gpu_layers: 0
+  groq:
+    base_url: "https://api.groq.com/openai/v1"
+    api_key_env: "GROQ_API_KEY"
+    model: "llama-3.1-8b-instant"
+    timeout_s: 30
 
   temperature: 0.25
   top_p: 0.85
-  repeat_penalty: 1.05
-
-  # Дуже важливо для голосового робота.
-  # Довгі відповіді звучать круто в чаті, але в роботі створюють latency.
-  max_tokens: 90
+  max_tokens: 60
 
   stop:
     - "<|im_end|>"
+
+# llm:
+#   engine: "llama_cpp"
+#   model_path: "models/llm/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+#   chat_format: "chatml"
+
+#   n_ctx: 768
+#   n_threads: 2
+#   n_batch: 64                                                      => offline mode
+#   n_gpu_layers: 0
+
+#   temperature: 0.25
+#   top_p: 0.85
+#   repeat_penalty: 1.05
+#   max_tokens: 55
+
+#   stop:
+#     - "<|im_end|>"
 
 # Optional automatic clarification for very suspicious STT output.
 quality_guard:
@@ -75,33 +84,27 @@ tts:
   engine: "piper"
   piper_bin: "piper"
 
-  model_path: "models/piper/en_US-lessac-medium.onnx"
-  config_path: "models/piper/en_US-lessac-medium.onnx.json"
+  model_path: "models/piper/en_US-amy-medium.onnx"
+  config_path: "models/piper/en_US-amy-medium.onnx.json"
 
   speaker_id: null
-
-  # Більше значення = повільніше і природніше.
-  length_scale: 1.12
-
-  # Трохи стабільніша, менш "нервова" інтонація.
+  length_scale: 1.08
   noise_scale: 0.45
   noise_w: 0.55
-
-  # Було 0.08 — майже без пауз.
-  sentence_silence: 0.28
-
+  sentence_silence: 0.25
   normalize_text: true
 
-  # Менші chunks = швидше починає говорити.
-  sentence_min_chars: 28
+  # Важливо для Raspberry Pi:
+  # false = не запускати Piper паралельно з локальною LLM.
+  stream_during_generation: false
+
+  sentence_min_chars: 40
   sentence_max_chars: 180
-  coalesce_wait_s: 0.08
+  coalesce_wait_s: 0.05
   chunk_max_chars: 220
 
-  # Це ми додамо у frontend нижче.
-  playback_gap_ms: 120
-
-  join_timeout_s: 90
+  synth_timeout_s: 18
+  join_timeout_s: 30
 
 logging:
   jsonl_path: "logs/voicepi.jsonl"
@@ -132,21 +135,19 @@ memory:
     max_tokens: 120
 
 camera:
-  # Uses Picamera2 and serves /camera/stream.mjpg plus /camera/snapshot.jpg.
   enabled: true
-  width: 640
-  height: 480
+  width: 320
+  height: 240
 
 vision:
   enabled: true
 
-  # Менше background CPU.
-  poll_interval_s: 4.0
+  # Важливо: не ганяємо computer vision у фоні.
+  # Камера і manual Analyze залишаються.
+  poll_enabled: false
+  poll_interval_s: 10.0
 
-  # Не аналізувати кадр на кожен звичайний turn.
-  # Vision все одно працюватиме:
-  # - через кнопку Analyze current frame
-  # - коли питання схоже на "what do you see?"
+  # Не чіпаємо камеру на кожну звичайну репліку.
   snapshot_on_turn: true
   always_attach_to_prompt: false
   max_prompt_age_s: 8.0
@@ -164,7 +165,7 @@ vision:
     model_path: "models/vision/mobilenet_iter_73000.caffemodel"
     config_path: "models/vision/deploy.prototxt"
     confidence_threshold: 0.45
-    max_objects: 6
+    max_objects: 4
 
 client:
   vad_threshold: 0.018

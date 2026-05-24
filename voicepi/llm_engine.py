@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+import os
+import requests
 
 
 _VISIBLE_FORMAT = """Output exactly this XML-like format every time:\n<rationale>One short visible rationale for debugging: what intent you inferred and any uncertainty. Do not reveal hidden chain-of-thought.</rationale>\n<answer>The spoken answer in natural English. No markdown. No labels like \"Answer:\". Do not include XML closing tags in the spoken text.</answer>"""
@@ -40,9 +42,44 @@ Rules:
 class LLMEngine:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
-        self.model_path: Path = cfg.path("llm.model_path")
+        self.engine = str(cfg.get("llm.engine", "llama_cpp")).strip().lower()
+        self.lock = threading.Lock()
+        self.llm = None
+        self.model_path: Path | None = None
+
+        if self.engine in {"groq", "groq_api", "api_groq"}:
+            self.engine = "groq"
+            self.groq_base_url = str(
+                cfg.get("llm.groq.base_url", "https://api.groq.com/openai/v1")
+            ).rstrip("/")
+            self.groq_model = str(cfg.get("llm.groq.model", "llama-3.1-8b-instant"))
+            self.groq_timeout_s = float(cfg.get("llm.groq.timeout_s", 30))
+
+            api_key_env = str(cfg.get("llm.groq.api_key_env", "GROQ_API_KEY"))
+            self.groq_api_key = str(
+                cfg.get("llm.groq.api_key", "") or os.environ.get(api_key_env, "")
+            )
+
+            if not self.groq_api_key:
+                raise RuntimeError(
+                    f"Groq API key is missing. Set environment variable {api_key_env}, "
+                    "or configure llm.groq.api_key for local testing only."
+                )
+
+            self.session = requests.Session()
+            return
+
+        if self.engine not in {"llama_cpp", "local", "llama"}:
+            raise RuntimeError(
+                f"Unsupported llm.engine: {self.engine!r}. Use 'llama_cpp' or 'groq'."
+            )
+
+        self.engine = "llama_cpp"
+        self.model_path = cfg.path("llm.model_path")
+
         if not self.model_path.exists():
             raise FileNotFoundError(f"LLM GGUF not found: {self.model_path}")
+
         try:
             from llama_cpp import Llama  # type: ignore
         except ImportError as exc:
@@ -50,12 +87,11 @@ class LLMEngine:
                 "llama-cpp-python is not installed. Run scripts/install_pi.sh; it builds with OpenBLAS on Pi."
             ) from exc
 
-        self.lock = threading.Lock()
         self.llm = Llama(
             model_path=str(self.model_path),
-            n_ctx=int(cfg.get("llm.n_ctx", 2048)),
-            n_threads=int(cfg.get("llm.n_threads", 4)),
-            n_batch=int(cfg.get("llm.n_batch", 128)),
+            n_ctx=int(cfg.get("llm.n_ctx", 1024)),
+            n_threads=int(cfg.get("llm.n_threads", 2)),
+            n_batch=int(cfg.get("llm.n_batch", 64)),
             n_gpu_layers=int(cfg.get("llm.n_gpu_layers", 0)),
             chat_format=str(cfg.get("llm.chat_format", "chatml")),
             verbose=False,
@@ -108,7 +144,57 @@ Do not invent robot actions that are not listed in the tool result.
             *trimmed,
             {"role": "user", "content": user_text},
         ]
+    def _common_params(self, *, max_tokens_default: int, stream: bool) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "temperature": float(self.cfg.get("llm.temperature", 0.25)),
+            "top_p": float(self.cfg.get("llm.top_p", 0.85)),
+            "max_tokens": int(self.cfg.get("llm.max_tokens", max_tokens_default)),
+            "stream": stream,
+        }
 
+        if self.engine == "llama_cpp":
+            params["repeat_penalty"] = float(self.cfg.get("llm.repeat_penalty", 1.05))
+
+            stop = self.cfg.get("llm.stop", None)
+            if stop:
+                params["stop"] = stop
+
+        return params
+
+    def _groq_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _groq_chat_completion(self, payload: dict[str, Any], *, stream: bool):
+        url = f"{self.groq_base_url}/chat/completions"
+
+        response = self.session.post(
+            url,
+            headers=self._groq_headers(),
+            json=payload,
+            stream=stream,
+            timeout=self.groq_timeout_s,
+        )
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Groq API error {response.status_code}: {response.text[:1000]}")
+
+        return response
+
+    def _create_chat_completion(self, params: dict[str, Any]):
+        if self.engine == "llama_cpp":
+            assert self.llm is not None
+            return self.llm.create_chat_completion(**params)
+
+        payload = dict(params)
+        payload["model"] = self.groq_model
+        payload.pop("repeat_penalty", None)
+
+        response = self._groq_chat_completion(payload, stream=False)
+        return response.json()
+    
     def plan_robot_action(
         self,
         user_text: str,
@@ -149,7 +235,7 @@ Do not invent robot actions that are not listed in the tool result.
         with self.lock:
             if cancel_event.is_set():
                 return {"action": "none", "confidence": 0.0, "reason": "cancelled"}
-            result = self.llm.create_chat_completion(**params)
+            result = self._create_chat_completion(params)
 
         try:
             text = result["choices"][0]["message"].get("content", "")
@@ -209,7 +295,7 @@ Do not invent robot actions that are not listed in the tool result.
         with self.lock:
             if cancel_event is not None and cancel_event.is_set():
                 return previous_summary
-            result = self.llm.create_chat_completion(**params)
+            result = self._create_chat_completion(params)
         try:
             text = result["choices"][0]["message"].get("content", "")
         except Exception:
@@ -223,50 +309,86 @@ Do not invent robot actions that are not listed in the tool result.
         cancel_event: threading.Event,
         on_token: Callable[[str], None],
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "messages": messages,
-            "temperature": float(self.cfg.get("llm.temperature", 0.45)),
-            "top_p": float(self.cfg.get("llm.top_p", 0.9)),
-            "repeat_penalty": float(self.cfg.get("llm.repeat_penalty", 1.08)),
-            "max_tokens": int(self.cfg.get("llm.max_tokens", 180)),
-            "stream": True,
-        }
-        stop = self.cfg.get("llm.stop", None)
-        if stop:
-            params["stop"] = stop
+        params = self._common_params(max_tokens_default=80, stream=True)
+        params["messages"] = messages
 
         started = time.perf_counter()
         token_count = 0
         raw_parts: list[str] = []
         cancelled = False
 
-        # llama.cpp model execution is not thread-safe for concurrent generations.
         with self.lock:
-            stream = self.llm.create_chat_completion(**params)
-            for chunk in stream:
-                if cancel_event.is_set():
-                    cancelled = True
-                    break
+            if self.engine == "llama_cpp":
+                assert self.llm is not None
+                stream = self.llm.create_chat_completion(**params)
+
+                for chunk in stream:
+                    if cancel_event.is_set():
+                        cancelled = True
+                        break
+
+                    token = _extract_stream_delta(chunk)
+
+                    if token:
+                        token_count += 1
+                        raw_parts.append(token)
+                        on_token(token)
+
+            else:
+                payload = dict(params)
+                payload["model"] = self.groq_model
+                payload.pop("repeat_penalty", None)
+
+                response = self._groq_chat_completion(payload, stream=True)
+
                 try:
-                    delta = chunk["choices"][0].get("delta", {})
-                    token = delta.get("content") or ""
-                except Exception:
-                    token = ""
-                if token:
-                    token_count += 1
-                    raw_parts.append(token)
-                    on_token(token)
+                    for line in response.iter_lines(decode_unicode=True):
+                        if cancel_event.is_set():
+                            cancelled = True
+                            break
+
+                        if not line or not line.startswith("data:"):
+                            continue
+
+                        data = line[len("data:"):].strip()
+
+                        if data == "[DONE]":
+                            break
+
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        token = _extract_stream_delta(chunk)
+
+                        if token:
+                            token_count += 1
+                            raw_parts.append(token)
+                            on_token(token)
+
+                finally:
+                    response.close()
 
         elapsed = max(time.perf_counter() - started, 1e-6)
+
         return {
             "raw": "".join(raw_parts),
             "tokens": token_count,
             "elapsed_s": elapsed,
             "tokens_per_s": token_count / elapsed,
             "cancelled": cancelled,
+            "engine": self.engine,
+            "model": self.groq_model if self.engine == "groq" else str(self.model_path),
         }
 
-
+def _extract_stream_delta(chunk: dict[str, Any]) -> str:
+    try:
+        delta = chunk["choices"][0].get("delta", {})
+        return delta.get("content") or ""
+    except Exception:
+        return ""
+    
 def _parse_first_json_object(text: str) -> dict[str, Any]:
     text = (text or "").strip()
     if not text:

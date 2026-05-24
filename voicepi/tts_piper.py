@@ -68,6 +68,9 @@ class PiperTTS:
         proc.stdin.write(text.encode("utf-8"))
         proc.stdin.close()
 
+        started = time.monotonic()
+        synth_timeout_s = float(self.cfg.get("tts.synth_timeout_s", 20))
+
         while proc.poll() is None:
             if cancel_event is not None and cancel_event.is_set():
                 proc.terminate()
@@ -76,6 +79,15 @@ class PiperTTS:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                 raise RuntimeError("TTS cancelled")
+
+            if synth_timeout_s > 0 and time.monotonic() - started > synth_timeout_s:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=0.8)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise RuntimeError(f"TTS timed out after {synth_timeout_s:.1f}s")
+
             time.sleep(0.02)
 
         stderr = b""
