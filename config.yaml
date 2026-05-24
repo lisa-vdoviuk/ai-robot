@@ -131,7 +131,7 @@ vision:
 
   object_detection:
     enabled: true
-    backend: "opencv_yolo_onnx"
+    backend: "yolo"
 
     model_path: "models/vision/yolo11n.onnx"
     labels_path: "models/vision/coco.names"
