@@ -90,10 +90,11 @@ VISION_PROFILES = {
     ),
 }
 # Kokoro ONNX models -- high quality offline TTS, no PyTorch.
-KOKORO_REPO = "hexgrad/Kokoro-82M"
+# Files hosted on GitHub releases (not HuggingFace) by the kokoro-onnx library author.
+_KOKORO_RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 KOKORO_FILES = [
-    ("kokoro-v0_19.onnx", "models/kokoro/kokoro-v0_19.onnx"),  # ~312 MB
-    ("voices-v1_0.bin",   "models/kokoro/voices-v1_0.bin"),    # ~83 MB
+    (f"{_KOKORO_RELEASE}/kokoro-v1.0.int8.onnx", "models/kokoro/kokoro-v1.0.int8.onnx"),  # ~88 MB
+    (f"{_KOKORO_RELEASE}/voices-v1.0.bin",        "models/kokoro/voices-v1.0.bin"),         # ~10 MB
 ]
 
 
@@ -240,10 +241,9 @@ def download_vosk(profile: str) -> None:
 
 
 def download_kokoro() -> None:
-    for filename, rel_path in KOKORO_FILES:
+    for url, rel_path in KOKORO_FILES:
         dst = ROOT / rel_path
-        url = hf_resolve_url(KOKORO_REPO, filename)
-        download_url(url, dst, f"Kokoro ONNX TTS: {filename}")
+        download_url(url, dst, f"Kokoro ONNX TTS: {Path(rel_path).name}")
 
 
 def print_disk_hint() -> None:

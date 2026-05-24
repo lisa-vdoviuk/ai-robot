@@ -86,8 +86,8 @@ tts:
     speed: 1.0
     lang: "en-us"   # "en-us" or "en-gb"
     sample_rate: 24000
-    model_path: "models/kokoro/kokoro-v0_19.onnx"
-    voices_path: "models/kokoro/voices-v1_0.bin"
+    model_path: "models/kokoro/kokoro-v1.0.int8.onnx"
+    voices_path: "models/kokoro/voices-v1.0.bin"
 
   # --- Piper config (engine: "piper") ---
   piper_bin: "piper"

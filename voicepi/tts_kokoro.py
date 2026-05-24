@@ -31,8 +31,8 @@ class KokoroTTS:
         self.sample_rate = int(cfg.get("tts.kokoro.sample_rate", 24000))
         self.timeout_s = float(cfg.get("tts.synth_timeout_s", 35))
 
-        self._model_path = str(cfg.path("tts.kokoro.model_path", "models/kokoro/kokoro-v0_19.onnx"))
-        self._voices_path = str(cfg.path("tts.kokoro.voices_path", "models/kokoro/voices-v1_0.bin"))
+        self._model_path = str(cfg.path("tts.kokoro.model_path", "models/kokoro/kokoro-v1.0.int8.onnx"))
+        self._voices_path = str(cfg.path("tts.kokoro.voices_path", "models/kokoro/voices-v1.0.bin"))
 
         self._kokoro = None
         self._lock = threading.Lock()
