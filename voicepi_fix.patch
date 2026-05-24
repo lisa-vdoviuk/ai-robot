@@ -1,0 +1,2632 @@
+--- a/app.py
++++ b/app.py
+@@ -7,7 +7,8 @@
+ import threading
+ import uuid
+ from typing import Any
+-from voicepi.tts_kokoro import KokoroTTS
++from voicepi.tts_kokoro import KokoroTTS
++from voicepi.tts_edge import EdgeTTS
+ from flask import Flask, Response, jsonify, render_template, request
+ from flask_sock import Sock
+--- a/config.yaml
++++ b/config.yaml
+@@ -1,189 +1,205 @@
+-server:
+-  host: "0.0.0.0"
+-  # Browser microphone access from another device usually requires HTTPS.
+-  # Use https://<raspberry-pi-ip>:5443 and accept the self-signed certificate.
+-  port: 5443
+-  https: true
+-  certfile: null
+-  keyfile: null
+-  secret_key: "change-me-local-dev"
+-
+-assistant:
+-  name: "Orion"
+-  language: "en"
+-  max_history_turns: 3
+-  visible_rationale: false
+-  system_prompt: |
+-    You are Orion, a local voice-first AI companion running on a Raspberry Pi.
+-    Speak English only.
+-
+-    Keep answers short and natural: usually 1 sentence, maximum 2 sentences.
+-    Use simple wording and clear punctuation.
+-    The user transcript comes from speech recognition and may contain errors.
+-    If the transcript is unclear, ask one short clarification.
+-
+-    The robot may provide camera observations, robot tool results, and logs.
+-    Treat them as sensor/tool context.
+-
+-stt:
+-  engine: "vosk"
+-  sample_rate: 16000
+-  # Quality default: better English model than the tiny 40 MB one, still feasible on Raspberry Pi 5.
+-  # For maximum speed, switch to models/vosk/vosk-model-small-en-us-0.15 and run download_models.py --stt small.
+-  model_path: "models/vosk/vosk-model-en-us-0.22-lgraph"
+-  min_final_chars: 2
+-  min_final_words: 1
+-  reject_phrases:
+-    - "um"
+-    - "uh"
+-    - "hmm"
+-    - "mm"
+-    - "noise"
+-
+-llm:
+-  engine: "groq"
+-
+-  groq:
+-    base_url: "https://api.groq.com/openai/v1"
+-    api_key_env: "GROQ_API_KEY"
+-    model: "llama-3.1-8b-instant"
+-    timeout_s: 30
+-
+-  temperature: 0.25
+-  top_p: 0.85
+-  max_tokens: 70
+-
+-tts:
+-  engine: "kokoro"
+-
+-  normalize_text: true
+-  stream_during_generation: false
+-
+-  sentence_min_chars: 60
+-  sentence_max_chars: 260
+-  chunk_max_chars: 320
+-  coalesce_wait_s: 0.05
+-
+-  synth_timeout_s: 35
+-  join_timeout_s: 45
+-  playback_gap_ms: 120
+-
+-  kokoro:
+-    lang_code: "a"
+-    voice: "af_heart"
+-    sample_rate: 24000
+-
+-  # fallback, якщо повернешся до piper
+-  piper_bin: "piper"
+-  model_path: "models/piper/en_US-lessac-medium.onnx"
+-  config_path: "models/piper/en_US-lessac-medium.onnx.json"
+-  speaker_id: null
+-  length_scale: 1.12
+-  noise_scale: 0.45
+-  noise_w: 0.55
+-  sentence_silence: 0.28
+-
+-memory:
+-  enabled: true
+-  db_path: "logs/memory.sqlite"
+-  user_id: "default"
+-  attach_to_prompt: true
+-
+-  max_facts: 5
+-  recall_k: 2
+-
+-  extract_facts: true
+-  max_episodes: 2000
+-
+-  embeddings:
+-    enabled: false
+-    model_path: "models/embed/nomic-embed-text-v1.5.Q4_K_M.gguf"
+-    n_ctx: 512
+-    n_threads: 3
+-
+-  summary:
+-    enabled: true
+-    trigger_turns: 10
+-    keep_recent_turns: 4
+-    max_tokens: 120
+-
+-camera:
+-  enabled: true
+-  width: 320
+-  height: 240
+-
+-vision:
+-  enabled: true
+-  poll_enabled: false
+-  poll_interval_s: 8.0
+-
+-  snapshot_on_turn: true
+-  always_attach_to_prompt: false
+-  max_prompt_age_s: 8.0
+-
+-  log_poll_observations: false
+-  obstacle_area_ratio: 0.10
+-
+-  motion:
+-    enabled: true
+-    threshold: 24
+-    min_area_ratio: 0.01
+-
+-  object_detection:
+-    enabled: true
+-    backend: "yolo"
+-
+-    model_path: "models/vision/yolo11n.onnx"
+-    labels_path: "models/vision/coco.names"
+-
+-    imgsz: 416
+-    confidence_threshold: 0.35
+-    nms_threshold: 0.45
+-    max_objects: 8
+-
+-client:
+-  vad_threshold: 0.018
+-  # Higher threshold while the assistant is speaking to avoid cancelling itself from speaker echo.
+-  barge_in_threshold: 0.045
+-  vad_hold_ms: 650
+-  min_speech_ms: 180
+-  preroll_ms: 450
+-  audio_chunk_ms: 80
+-
+-robot:
+-  # Set true when the ESP32 firmware in esp32/voicepi_motor_controller.ino is running.
+-  enabled: false
+-  # Use the IP printed in the ESP32 Serial Monitor after it connects to Wi-Fi.
+-  base_url: "http://192.168.1.50"
+-  token: "change-me-robot-token"
+-  timeout_s: 2.0
+-
+-  # Safety clamps. The LLM may request a movement, but these hard limits win.
+-  min_confidence: 0.55
+-  min_speed: 0.20
+-  max_speed: 0.75
+-  default_speed: 0.45
+-  min_duration_ms: 150
+-  max_duration_ms: 1800
+-  default_duration_ms: 700
+-  planner_max_tokens: 80
+-  # Speeds up normal chat: only run the LLM robot planner when the transcript looks robot-control-related.
+-  # This gate never executes commands by itself; it only decides whether to ask the planner.
+-  fast_intent_gate: true
+-
+-  # Emergency behavior.
+-  stop_on_barge_in: true
+-  stop_on_disconnect: true
+-
+-system:
+-  # Raspberry Pi health telemetry shown on the dashboard (CPU temp, CPU load, RAM).
+-  enabled: true
+-  # How often the background sampler refreshes (seconds). The dashboard polls /system/stats.
+-  interval_s: 2.0
+-  # Thresholds for highlighting. The Pi 5 starts soft-throttling around 80-85 C.
+-  temp_warn_c: 70.0
+-  temp_critical_c: 80.0
+-  cpu_warn_pct: 80.0
+-  cpu_critical_pct: 92.0
+-  ram_warn_pct: 80.0
+-  ram_critical_pct: 92.0
+\ No newline at end of file
++server:
++  host: "0.0.0.0"
++  # Browser microphone access from another device usually requires HTTPS.
++  # Use https://<raspberry-pi-ip>:5443 and accept the self-signed certificate.
++  port: 5443
++  https: true
++  certfile: null
++  keyfile: null
++  secret_key: "change-me-local-dev"
++
++assistant:
++  name: "Orion"
++  language: "en"
++  max_history_turns: 3
++  visible_rationale: false
++  system_prompt: |
++    You are Orion, a local voice-first AI companion running on a Raspberry Pi.
++    Speak English only.
++
++    Keep answers short and natural: usually 1 sentence, maximum 2 sentences.
++    Use simple wording and clear punctuation.
++    The user transcript comes from speech recognition and may contain errors.
++    If the transcript is unclear, ask one short clarification.
++
++    The robot may provide camera observations, robot tool results, and logs.
++    Treat them as sensor/tool context.
++
++stt:
++  engine: "vosk"
++  sample_rate: 16000
++  model_path: "models/vosk/vosk-model-en-us-0.22-lgraph"
++  min_final_chars: 2
++  min_final_words: 1
++  reject_phrases:
++    - "um"
++    - "uh"
++    - "hmm"
++    - "mm"
++    - "noise"
++
++llm:
++  engine: "groq"
++
++  groq:
++    base_url: "https://api.groq.com/openai/v1"
++    api_key_env: "GROQ_API_KEY"
++    model: "llama-3.1-8b-instant"
++    timeout_s: 30
++
++  temperature: 0.25
++  top_p: 0.85
++  max_tokens: 70
++
++tts:
++  # "edge"   -- Microsoft Edge neural TTS (best quality, free, internet required, no model files)
++  # "kokoro" -- Kokoro 82M via ONNX Runtime (excellent offline quality, ~400 MB models)
++  # "piper"  -- Piper (fastest, lower quality)
++  engine: "edge"
++
++  normalize_text: true
++  stream_during_generation: false
++
++  sentence_min_chars: 60
++  sentence_max_chars: 260
++  chunk_max_chars: 320
++  coalesce_wait_s: 0.05
++
++  synth_timeout_s: 35
++  join_timeout_s: 45
++  playback_gap_ms: 120
++
++  # --- Edge TTS config (engine: "edge") ---
++  # Best quality voices: en-US-AriaNeural, en-US-JennyNeural, en-US-GuyNeural,
++  #   en-GB-SoniaNeural, en-GB-RyanNeural, en-AU-NatashaNeural
++  edge:
++    voice: "en-US-AriaNeural"
++    rate: "+0%"       # e.g. "+10%" to speak faster
++    volume: "+0%"
++
++  # --- Kokoro ONNX config (engine: "kokoro") ---
++  # Voices: af_heart (default), af_bella, af_nicole, am_adam, am_michael,
++  #   bf_emma, bf_isabella, bm_george, bm_lewis
++  # Download models first: python scripts/download_models.py --tts-engine kokoro
++  kokoro:
++    voice: "af_heart"
++    speed: 1.0
++    lang: "en-us"   # "en-us" or "en-gb"
++    sample_rate: 24000
++    model_path: "models/kokoro/kokoro-v0_19.onnx"
++    voices_path: "models/kokoro/voices-v1_0.bin"
++
++  # --- Piper config (engine: "piper") ---
++  piper_bin: "piper"
++  model_path: "models/piper/en_US-amy-medium.onnx"
++  config_path: "models/piper/en_US-amy-medium.onnx.json"
++  speaker_id: null
++  length_scale: 1.12
++  noise_scale: 0.45
++  noise_w: 0.55
++  sentence_silence: 0.28
++
++memory:
++  enabled: true
++  db_path: "logs/memory.sqlite"
++  user_id: "default"
++  attach_to_prompt: true
++
++  max_facts: 5
++  recall_k: 2
++
++  extract_facts: true
++  max_episodes: 2000
++
++  embeddings:
++    enabled: false
++    model_path: "models/embed/nomic-embed-text-v1.5.Q4_K_M.gguf"
++    n_ctx: 512
++    n_threads: 3
++
++  summary:
++    enabled: true
++    trigger_turns: 10
++    keep_recent_turns: 4
++    max_tokens: 120
++
++camera:
++  enabled: true
++  width: 320
++  height: 240
++  # For USB camera fallback: device index (0 = /dev/video0, 1 = /dev/video1, ...)
++  cv2_device_index: 0
++
++vision:
++  enabled: true
++  poll_enabled: false
++  poll_interval_s: 8.0
++
++  snapshot_on_turn: true
++  always_attach_to_prompt: false
++  max_prompt_age_s: 8.0
++
++  log_poll_observations: false
++  obstacle_area_ratio: 0.10
++
++  motion:
++    enabled: true
++    threshold: 24
++    min_area_ratio: 0.01
++
++  object_detection:
++    enabled: true
++    # "yolo"   -- YOLOv11n via ONNX Runtime (no PyTorch). Best accuracy on COCO 80 classes.
++    #            Download: python scripts/download_models.py --vision yolo
++    # "mobilenet" -- OpenCV DNN MobileNet SSD. Lighter, 20 VOC classes.
++    #            Download: python scripts/download_models.py --vision mobilenet-ssd
++    backend: "yolo"
++
++    # YOLOv11n ONNX model path (backend: yolo).
++    # The app also checks <project_root>/yolo11n.onnx as fallback automatically.
++    model_path: "models/vision/yolo11n.onnx"
++
++    # MobileNet SSD paths (backend: mobilenet -- legacy)
++    config_path: "models/vision/deploy.prototxt"
++
++    imgsz: 416          # inference size in pixels (416 is fast on Pi; use 640 for accuracy)
++    confidence_threshold: 0.35
++    nms_threshold: 0.45
++    max_objects: 8
++
++client:
++  vad_threshold: 0.018
++  barge_in_threshold: 0.045
++  vad_hold_ms: 650
++  min_speech_ms: 180
++  preroll_ms: 450
++  audio_chunk_ms: 80
++
++robot:
++  enabled: false
++  base_url: "http://192.168.1.50"
++  token: "change-me-robot-token"
++  timeout_s: 2.0
++
++  min_confidence: 0.55
++  min_speed: 0.20
++  max_speed: 0.75
++  default_speed: 0.45
++  min_duration_ms: 150
++  max_duration_ms: 1800
++  default_duration_ms: 700
++  planner_max_tokens: 80
++  fast_intent_gate: true
++
++  stop_on_barge_in: true
++  stop_on_disconnect: true
++
++system:
++  enabled: true
++  interval_s: 2.0
++  temp_warn_c: 70.0
++  temp_critical_c: 80.0
++  cpu_warn_pct: 80.0
++  cpu_critical_pct: 92.0
++  ram_warn_pct: 80.0
++  ram_critical_pct: 92.0
+ 
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,15 +1,36 @@
++# Core web server
+ Flask>=3.0.0
+ Flask-Sock>=0.7.0
+ simple-websocket>=1.0.0
++
++# Config / utils
+ PyYAML>=6.0.1
+-vosk>=0.3.45
+-piper-tts>=1.4.2
+-llama-cpp-python>=0.3.8
+-huggingface_hub>=0.23.0
+ requests>=2.31.0
+-pyOpenSSL>=24.0.0
+ tqdm>=4.66.0
+ numpy
+-opencv-python
++
++# SSL (self-signed cert for browser mic access)
++pyOpenSSL>=24.0.0
++
++# STT
++vosk>=0.3.45
++
++# LLM (only needed for local llama_cpp engine; groq/openai engines skip this)
++# llama-cpp-python>=0.3.8    # install separately via install_pi.sh (needs CMake flags)
++huggingface_hub>=0.23.0
++
++# TTS -- choose ONE engine in config.yaml: tts.engine = "kokoro" | "edge" | "piper"
++# kokoro-onnx: high quality, offline, ONNX Runtime (no PyTorch), works on ARM
++kokoro-onnx>=0.4.0
++# edge-tts: neural quality (best), free, internet required, no model files
++edge-tts>=6.1.9
++# piper-tts: kept for legacy; kokoro-onnx or edge-tts preferred
++piper-tts>=1.4.2
++
++# Audio encoding/IO
+ soundfile>=0.12.1
+-kokoro>=0.9.4,<0.10
+\ No newline at end of file
++
++# Vision / Camera
++# opencv-python is installed via apt (python3-opencv) to get ARM-optimized build.
++# onnxruntime for YOLO object detection (no PyTorch needed).
++onnxruntime>=1.17.0
+ 
+--- a/scripts/download_models.py
++++ b/scripts/download_models.py
+@@ -83,8 +83,20 @@
+         ("https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt", "models/vision/deploy.prototxt"),
+         ("https://github.com/chuanqi305/MobileNet-SSD/raw/master/mobilenet_iter_73000.caffemodel", "models/vision/mobilenet_iter_73000.caffemodel"),
+     ),
++    "yolo": (
++        # YOLOv11n ONNX -- used by the built-in onnxruntime detector (no PyTorch).
++        ("https://huggingface.co/Ultralytics/assets/resolve/main/yolo11n.onnx?download=true",
++         "models/vision/yolo11n.onnx"),
++    ),
+ }
++# Kokoro ONNX models -- high quality offline TTS, no PyTorch.
++KOKORO_REPO = "hexgrad/Kokoro-82M"
++KOKORO_FILES = [
++    ("kokoro-v0_19.onnx", "models/kokoro/kokoro-v0_19.onnx"),  # ~312 MB
++    ("voices-v1_0.bin",   "models/kokoro/voices-v1_0.bin"),    # ~83 MB
++]
++
+ 
+ VOSK_PROFILES = {
+     "quality": "vosk-model-en-us-0.22-lgraph",
+     "small": "vosk-model-small-en-us-0.15",
+@@ -227,6 +239,13 @@
+     print(f"✓ {dst_dir.relative_to(ROOT)}", flush=True)
+ 
+ 
++def download_kokoro() -> None:
++    for filename, rel_path in KOKORO_FILES:
++        dst = ROOT / rel_path
++        url = hf_resolve_url(KOKORO_REPO, filename)
++        download_url(url, dst, f"Kokoro ONNX TTS: {filename}")
++
++
+ def print_disk_hint() -> None:
+     usage = shutil.disk_usage(ROOT)
+     print(
+@@ -241,11 +260,17 @@
+     parser.add_argument("--skip-llm", action="store_true")
+     parser.add_argument("--skip-stt", action="store_true")
+     parser.add_argument("--skip-tts", action="store_true")
++    parser.add_argument(
++        "--tts-engine",
++        choices=["piper", "kokoro"],
++        default="kokoro",
++        help="Which TTS engine to download models for (default: kokoro). edge-tts needs no models.",
++    )
+     parser.add_argument("--skip-vision", action="store_true")
+     parser.add_argument("--llm", choices=LLM_PROFILES, default="quality")
+     parser.add_argument("--stt", choices=VOSK_PROFILES, default="quality")
+     parser.add_argument("--tts", choices=PIPER_PROFILES, default="amy-medium")
+-    parser.add_argument("--vision", choices=VISION_PROFILES, default="mobilenet-ssd")
++    parser.add_argument("--vision", choices=VISION_PROFILES, default="yolo")
+     parser.add_argument(
+         "--small-first",
+         action="store_true",
+@@ -261,7 +286,10 @@
+     if not args.skip_stt:
+         tasks.append(("stt", lambda: download_vosk(args.stt)))
+     if not args.skip_tts:
+-        tasks.append(("tts", lambda: download_piper(args.tts)))
++        if args.tts_engine == "kokoro":
++            tasks.append(("tts", download_kokoro))
++        else:
++            tasks.append(("tts", lambda: download_piper(args.tts)))
+     if not args.skip_vision:
+         tasks.append(("vision", lambda: download_vision(args.vision)))
+ 
+ 
+--- a/scripts/install_pi.sh
++++ b/scripts/install_pi.sh
+@@ -1,48 +1,82 @@
+ #!/usr/bin/env bash
++# Raspberry Pi OS 64-bit (aarch64) setup script for VoicePi.
++# Run once after cloning the repo.
+ set -euo pipefail
+ 
+ cd "$(dirname "$0")/.."
+ 
+ if [[ "$(uname -m)" != "aarch64" && "$(uname -m)" != "arm64" ]]; then
+-  echo "Warning: this script is tuned for Raspberry Pi OS 64-bit / ARM64, current arch: $(uname -m)"
++  echo "Warning: tuned for Raspberry Pi OS 64-bit / ARM64, current arch: $(uname -m)"
+ fi
+ 
++echo "==> Installing system packages..."
+ sudo apt-get update
+ sudo apt-get install -y \
+   python3-venv python3-dev build-essential cmake pkg-config \
+   libopenblas-dev libssl-dev espeak-ng ffmpeg unzip wget git \
+-  python3-picamera2 python3-opencv python3-numpy
++  python3-picamera2 python3-opencv python3-numpy \
++  portaudio19-dev libsndfile1
+ 
+-# Picamera2 is normally installed through apt on Raspberry Pi OS.
+-# --system-site-packages lets the venv import python3-picamera2/python3-opencv.
++# --system-site-packages lets the venv import apt-installed
++# python3-picamera2 and python3-opencv (ARM-optimised builds).
++echo "==> Creating virtual environment..."
+ python3 -m venv --system-site-packages .venv
+ source .venv/bin/activate
+ python -m pip install --upgrade pip wheel setuptools
+ 
+-# Build llama-cpp-python against OpenBLAS on Raspberry Pi CPU.
+-export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS"
+-export FORCE_CMAKE=1
+-python -m pip install --no-cache-dir --force-reinstall llama-cpp-python
++# onnxruntime -- ARM64 wheels available on PyPI since 1.17.
++echo "==> Installing onnxruntime..."
++pip install --no-cache-dir "onnxruntime>=1.17.0"
++
++# kokoro-onnx -- no PyTorch, ONNX Runtime based, works on Pi.
++echo "==> Installing kokoro-onnx..."
++pip install --no-cache-dir "kokoro-onnx>=0.4.0"
++
++# edge-tts -- Microsoft Edge neural TTS, free, internet required.
++echo "==> Installing edge-tts..."
++pip install --no-cache-dir "edge-tts>=6.1.9"
++
++# LLM (local engine only -- skip if you use groq/openai in config.yaml).
++# Groq is the default; uncomment the block below only if llm.engine = "llama_cpp".
++# export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS"
++# export FORCE_CMAKE=1
++# pip install --no-cache-dir --force-reinstall llama-cpp-python
+ 
+-# Install the rest. The llama-cpp-python line in requirements will be satisfied.
+-python -m pip install --no-cache-dir -r requirements.txt
++echo "==> Installing remaining Python dependencies..."
++pip install --no-cache-dir -r requirements.txt
+ 
+ if [[ ! -f config.yaml ]]; then
+-  cp config.example.yaml config.yaml
+-  echo "Created config.yaml"
++  cp config.example.yaml config.yaml 2>/dev/null || true
++  echo "Created config.yaml from example"
+ fi
+ 
+-echo
++echo ""
+ cat <<'MSG'
+-Install complete.
++=== Install complete ===
+ 
+-Next:
+-  source .venv/bin/activate
+-  python scripts/download_models.py
+-  python app.py --config config.yaml
++Next steps:
++  1. source .venv/bin/activate
+ 
+-Open from your laptop:
+-  https://<raspberry-pi-ip>:5443
++  2. Download models:
++       # For offline Kokoro TTS + YOLO + STT (no LLM -- uses Groq API):
++       python scripts/download_models.py --skip-llm
+ 
+-Accept the self-signed certificate so the browser can use the laptop microphone.
++       # Or with local LLM:
++       python scripts/download_models.py
++
++  3. Edit config.yaml:
++       tts.engine = "edge"    # best quality, needs internet (Microsoft Edge TTS)
++       tts.engine = "kokoro"  # best offline quality
++
++  4. Run:
++       python app.py --config config.yaml
++
++  5. Open from your laptop:
++       https://<raspberry-pi-ip>:5443
++       (accept the self-signed certificate so browser can use the mic)
++
++Camera troubleshooting:
++  - CSI camera (Pi ribbon cable): enable with  sudo raspi-config  -> Interface -> Camera
++  - USB camera: works automatically via cv2 fallback (/dev/video0)
++  - Check camera status at: https://<pi-ip>:5443/camera/status
+ MSG
+ 
+--- a/voicepi/camera.py
++++ b/voicepi/camera.py
+@@ -1,3 +1,4 @@
++"""Camera manager with Picamera2 (CSI) primary and cv2.VideoCapture (USB) fallback."""
+ from __future__ import annotations
+ 
+ import io
+@@ -16,6 +17,7 @@
+     frame_id: int = 0
+     last_frame_age_s: float | None = None
+     size: tuple[int, int] = (640, 480)
++    backend: str = "none"
+ 
+     def to_dict(self) -> dict[str, Any]:
+         return {
+@@ -26,11 +28,12 @@
+             "frame_id": self.frame_id,
+             "last_frame_age_s": None if self.last_frame_age_s is None else round(self.last_frame_age_s, 3),
+             "size": list(self.size),
++            "backend": self.backend,
+         }
+ 
+ 
+ class StreamingOutput(io.BufferedIOBase):
+-    """Picamera2 FileOutput target that stores the latest JPEG frame."""
++    """Shared frame buffer written by camera backend, read by HTTP routes."""
+ 
+     def __init__(self) -> None:
+         self.frame: bytes | None = None
+@@ -65,7 +68,11 @@
+ 
+ 
+ class CameraManager:
+-    """Small Picamera2 wrapper used by Flask routes, UI MJPEG stream and vision snapshots."""
++    """Camera wrapper: tries Picamera2 (CSI ribbon cable) first, falls back to cv2 (USB).
++
++    On Raspberry Pi OS you must enable the camera in raspi-config or /boot/config.txt.
++    For USB cameras the fallback activates automatically.
++    """
+ 
+     def __init__(self, cfg, logger=None) -> None:
+         self.cfg = cfg
+@@ -75,45 +82,53 @@
+             int(cfg.get("camera.width", 640)),
+             int(cfg.get("camera.height", 480)),
+         )
++        # Which device index to try for cv2 fallback (0 = /dev/video0).
++        self._cv2_index = int(cfg.get("camera.cv2_device_index", 0))
++
+         self.output = StreamingOutput()
+-        self.picam2 = None
++        self._picam2 = None
++        self._cv2_thread: threading.Thread | None = None
++        self._cv2_stop = threading.Event()
+         self.running = False
+         self.error: str | None = None
++        self._backend = "none"
+         self.lock = threading.RLock()
+ 
++    # ------------------------------------------------------------------
++    # Public API
++    # ------------------------------------------------------------------
++
+     def start(self) -> None:
+         if not self.enabled:
+             return
+         with self.lock:
+             if self.running:
+                 return
+-            try:
+-                from picamera2 import Picamera2  # type: ignore
+-                from picamera2.encoders import JpegEncoder  # type: ignore
+-                from picamera2.outputs import FileOutput  # type: ignore
+-
+-                picam2 = Picamera2()
+-                config = picam2.create_video_configuration(main={"size": self.size})
+-                picam2.configure(config)
+-                picam2.start_recording(JpegEncoder(), FileOutput(self.output))
+-                self.picam2 = picam2
+-                self.running = True
+-                self.error = None
+-                self._log("camera", "info", "camera started", size=self.size)
+-            except Exception as exc:
+-                self.running = False
+-                self.error = str(exc)
+-                self._log("camera", "error", f"camera failed to start: {exc}")
++            # Try Picamera2 first (CSI camera), then fall back to cv2 (USB / V4L2).
++            if self._try_picamera2():
++                return
++            self._log("camera", "info", "Picamera2 unavailable -- trying cv2.VideoCapture fallback")
++            self._try_cv2()
+ 
+     def stop(self) -> None:
+         with self.lock:
+-            if self.picam2 is not None:
++            # Stop Picamera2
++            if self._picam2 is not None:
+                 try:
+-                    self.picam2.stop_recording()
++                    self._picam2.stop_recording()
+                 except Exception as exc:
+-                    self._log("camera", "warning", f"camera stop failed: {exc}")
+-            self.picam2 = None
++                    self._log("camera", "warning", f"picamera2 stop failed: {exc}")
++                self._picam2 = None
++
++            # Stop cv2 thread
++            self._cv2_stop.set()
++            if self._cv2_thread and self._cv2_thread.is_alive():
++                self._cv2_thread.join(timeout=3.0)
++            self._cv2_thread = None
++            self._cv2_stop.clear()
++
+             self.running = False
++            self._backend = "none"
+ 
+     def status(self) -> CameraStatus:
+         frame_id, frame, age = self.output.latest()
+@@ -126,6 +141,7 @@
+             frame_id=frame_id,
+             last_frame_age_s=age,
+             size=self.size,
++            backend=self._backend,
+         )
+ 
+     def latest_jpeg(self) -> bytes | None:
+@@ -146,6 +162,119 @@
+             yield frame
+             yield b"\r\n"
+ 
++    # ------------------------------------------------------------------
++    # Private -- Picamera2 backend
++    # ------------------------------------------------------------------
++
++    def _try_picamera2(self) -> bool:
++        """Returns True if Picamera2 started successfully."""
++        try:
++            from picamera2 import Picamera2  # type: ignore
++            from picamera2.encoders import JpegEncoder  # type: ignore
++            from picamera2.outputs import FileOutput  # type: ignore
++
++            picam2 = Picamera2()
++            # Prefer a format that JpegEncoder can handle on all Pi generations.
++            video_config = picam2.create_video_configuration(
++                main={"size": self.size, "format": "RGB888"},
++                controls={"FrameRate": 10},
++            )
++            picam2.configure(video_config)
++            picam2.start_recording(JpegEncoder(), FileOutput(self.output))
++            self._picam2 = picam2
++            self.running = True
++            self.error = None
++            self._backend = "picamera2"
++            self._log("camera", "info", "camera started (picamera2)", size=self.size)
++            return True
++
++        except ImportError:
++            self._log("camera", "info", "picamera2 not installed -- will try cv2")
++        except Exception as exc:
++            self._log("camera", "warning", f"picamera2 failed: {exc} -- will try cv2")
++        return False
++
++    # ------------------------------------------------------------------
++    # Private -- cv2 / V4L2 fallback backend
++    # ------------------------------------------------------------------
++
++    def _try_cv2(self) -> None:
++        try:
++            import cv2  # type: ignore  # noqa: F401
++        except ImportError:
++            self.error = "Neither picamera2 nor opencv-python is available"
++            self._log("camera", "error", self.error)
++            return
++
++        import cv2  # type: ignore
++
++        cap = cv2.VideoCapture(self._cv2_index)
++        if not cap.isOpened():
++            self.error = f"cv2.VideoCapture({self._cv2_index}) could not open -- no camera found"
++            self._log("camera", "error", self.error)
++            return
++
++        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.size[0])
++        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.size[1])
++        cap.set(cv2.CAP_PROP_FPS, 10)
++        cap.release()
++
++        self.running = True
++        self.error = None
++        self._backend = f"cv2-v4l2-/dev/video{self._cv2_index}"
++        self._log("camera", "info", f"camera started (cv2 fallback, /dev/video{self._cv2_index})", size=self.size)
++
++        self._cv2_stop.clear()
++        self._cv2_thread = threading.Thread(
++            target=self._cv2_capture_loop,
++            args=(self._cv2_index,),
++            name="voicepi-camera-cv2",
++            daemon=True,
++        )
++        self._cv2_thread.start()
++
++    def _cv2_capture_loop(self, device_index: int) -> None:
++        import cv2  # type: ignore
++
++        cap = cv2.VideoCapture(device_index)
++        if not cap.isOpened():
++            with self.lock:
++                self.error = f"cv2 capture failed to (re)open /dev/video{device_index}"
++                self.running = False
++            self._log("camera", "error", self.error)
++            return
++
++        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.size[0])
++        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.size[1])
++        cap.set(cv2.CAP_PROP_FPS, 10)
++
++        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]
++        consecutive_failures = 0
++
++        try:
++            while not self._cv2_stop.is_set():
++                ok, frame = cap.read()
++                if not ok or frame is None:
++                    consecutive_failures += 1
++                    if consecutive_failures > 30:
++                        with self.lock:
++                            self.error = "cv2 camera stopped delivering frames"
++                            self.running = False
++                        self._log("camera", "error", self.error)
++                        break
++                    time.sleep(0.05)
++                    continue
++
++                consecutive_failures = 0
++                _, buf = cv2.imencode(".jpg", frame, encode_params)
++                self.output.write(buf.tobytes())
++                # ~10 fps target
++                time.sleep(0.08)
++        finally:
++            cap.release()
++
++    # ------------------------------------------------------------------
++
+     def _log(self, source: str, level: str, message: str, **fields: Any) -> None:
+         if self.logger is not None:
+             try:
+ 
+--- a/voicepi/config.py
++++ b/voicepi/config.py
+@@ -60,6 +60,9 @@
+         tts_engine = str(self.get("tts.engine", "piper")).strip().lower()
+         if tts_engine in {"piper", "local"}:
+             required_paths.append("tts.model_path")
++        elif tts_engine == "kokoro":
++            required_paths.append("tts.kokoro.model_path")
++            required_paths.append("tts.kokoro.voices_path")
+ 
+         for dotted in required_paths:
+             p = self.path(dotted)
+@@ -72,5 +75,6 @@
+                 p = self.path("tts.config_path")
+                 if not p.exists():
+                     missing.append(f"tts.config_path: {p}")
++        # edge-tts: no model files needed
+ 
+         return missing
+ 
+--- a/voicepi/tts_kokoro.py
++++ b/voicepi/tts_kokoro.py
+@@ -1,69 +1,78 @@
+-from __future__ import annotations
+-
+-import io
+-import threading
+-import time
+-
+-import soundfile as sf
+-
+-from .text_utils import clean_for_tts
+-
+-
+-class KokoroTTS:
+-    mime_type = "audio/wav"
+-
+-    def __init__(self, cfg) -> None:
+-        self.cfg = cfg
+-        self.normalize_text = bool(cfg.get("tts.normalize_text", True))
+-        self.lang_code = str(cfg.get("tts.kokoro.lang_code", "a"))
+-        self.voice = str(cfg.get("tts.kokoro.voice", "af_heart"))
+-        self.sample_rate = int(cfg.get("tts.kokoro.sample_rate", 24000))
+-        self.timeout_s = float(cfg.get("tts.synth_timeout_s", 35))
+-
+-        self._pipeline = None
+-        self._lock = threading.Lock()
+-
+-    def _load_pipeline(self):
+-        if self._pipeline is not None:
+-            return self._pipeline
+-
+-        from kokoro import KPipeline  # type: ignore
+-
+-        self._pipeline = KPipeline(lang_code=self.lang_code)
+-        return self._pipeline
+-
+-    def synthesize_wav(self, text: str, cancel_event: threading.Event | None = None) -> bytes:
+-        text = clean_for_tts(text) if self.normalize_text else (text or "").strip()
+-
+-        if not text:
+-            return b""
+-
+-        if cancel_event is not None and cancel_event.is_set():
+-            raise RuntimeError("TTS cancelled")
+-
+-        started = time.monotonic()
+-        audio_parts = []
+-
+-        with self._lock:
+-            pipeline = self._load_pipeline()
+-            generator = pipeline(text, voice=self.voice)
+-
+-            for _graphemes, _phonemes, audio in generator:
+-                if cancel_event is not None and cancel_event.is_set():
+-                    raise RuntimeError("TTS cancelled")
+-
+-                if self.timeout_s > 0 and time.monotonic() - started > self.timeout_s:
+-                    raise RuntimeError(f"Kokoro TTS timed out after {self.timeout_s:.1f}s")
+-
+-                audio_parts.append(audio)
+-
+-        if not audio_parts:
+-            return b""
+-
+-        import numpy as np
+-
+-        audio_all = np.concatenate(audio_parts)
+-
+-        out = io.BytesIO()
+-        sf.write(out, audio_all, self.sample_rate, format="WAV")
+-        return out.getvalue()
+\ No newline at end of file
++"""Kokoro TTS via kokoro-onnx (ONNX Runtime) -- no PyTorch required.
++
++Install model files once:
++  python scripts/download_models.py --tts-engine kokoro
++
++Voices: af_heart (default), af_bella, af_nicole, am_adam, am_michael,
++        bf_emma, bf_isabella, bm_george, bm_lewis
++"""
++from __future__ import annotations
++
++import io
++import threading
++import time
++
++import soundfile as sf
++
++from .text_utils import clean_for_tts
++
++
++class KokoroTTS:
++    """Kokoro 82M via ONNX Runtime -- ARM-friendly, no PyTorch needed."""
++
++    mime_type = "audio/wav"
++
++    def __init__(self, cfg) -> None:
++        self.cfg = cfg
++        self.normalize_text = bool(cfg.get("tts.normalize_text", True))
++        self.voice = str(cfg.get("tts.kokoro.voice", "af_heart"))
++        self.speed = float(cfg.get("tts.kokoro.speed", 1.0))
++        self.lang = str(cfg.get("tts.kokoro.lang", "en-us"))
++        self.sample_rate = int(cfg.get("tts.kokoro.sample_rate", 24000))
++        self.timeout_s = float(cfg.get("tts.synth_timeout_s", 35))
++
++        self._model_path = str(cfg.path("tts.kokoro.model_path", "models/kokoro/kokoro-v0_19.onnx"))
++        self._voices_path = str(cfg.path("tts.kokoro.voices_path", "models/kokoro/voices-v1_0.bin"))
++
++        self._kokoro = None
++        self._lock = threading.Lock()
++
++    def _load(self):
++        if self._kokoro is not None:
++            return self._kokoro
++        try:
++            from kokoro_onnx import Kokoro  # type: ignore
++        except ImportError as exc:
++            raise RuntimeError(
++                "kokoro-onnx is not installed. Run: pip install kokoro-onnx\n"
++                "Then download models: python scripts/download_models.py --tts-engine kokoro"
++            ) from exc
++        self._kokoro = Kokoro(self._model_path, self._voices_path)
++        return self._kokoro
++
++    def synthesize_wav(self, text: str, cancel_event: threading.Event | None = None) -> bytes:
++        text = clean_for_tts(text) if self.normalize_text else (text or "").strip()
++        if not text:
++            return b""
++
++        if cancel_event is not None and cancel_event.is_set():
++            raise RuntimeError("TTS cancelled")
++
++        started = time.monotonic()
++        with self._lock:
++            if cancel_event is not None and cancel_event.is_set():
++                raise RuntimeError("TTS cancelled")
++            if self.timeout_s > 0 and time.monotonic() - started > self.timeout_s:
++                raise RuntimeError(f"Kokoro TTS timed out after {self.timeout_s:.1f}s")
++
++            kokoro = self._load()
++            samples, sample_rate = kokoro.create(
++                text,
++                voice=self.voice,
++                speed=self.speed,
++                lang=self.lang,
++            )
++
++        out = io.BytesIO()
++        sf.write(out, samples, sample_rate, format="WAV")
++        return out.getvalue()
+ 
+--- a/voicepi/vision.py
++++ b/voicepi/vision.py
+@@ -1,689 +1,778 @@
+-from __future__ import annotations
+-
+-import threading
+-import time
+-from dataclasses import dataclass, field
+-from pathlib import Path
+-from typing import Any, Callable
+-
+-from .camera import CameraManager
+-
+-
+-VOC_CLASSES = [
+-    "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
+-    "cat", "chair", "cow", "dining table", "dog", "horse", "motorbike", "person",
+-    "potted plant", "sheep", "sofa", "train", "tv monitor",
+-]
+-
+-OBSTACLE_LABELS = {
+-    "person", "chair", "dining table", "sofa", "bottle", "cat", "dog", "car", "bus",
+-    "bicycle", "motorbike", "potted plant", "tv monitor",
+-}
+-
+-
+-@dataclass(frozen=True)
+-class VisionObservation:
+-    ok: bool
+-    ts: float
+-    iso: str
+-    backend: str
+-    summary: str
+-    confidence: float = 0.0
+-    objects: list[dict[str, Any]] = field(default_factory=list)
+-    scene: dict[str, Any] = field(default_factory=dict)
+-    motion: dict[str, Any] = field(default_factory=dict)
+-    frame: dict[str, Any] = field(default_factory=dict)
+-    error: str | None = None
+-    reason: str = "poll"
+-
+-    def to_dict(self) -> dict[str, Any]:
+-        return {
+-            "ok": self.ok,
+-            "ts": self.ts,
+-            "iso": self.iso,
+-            "backend": self.backend,
+-            "summary": self.summary,
+-            "confidence": self.confidence,
+-            "objects": self.objects,
+-            "scene": self.scene,
+-            "motion": self.motion,
+-            "frame": self.frame,
+-            "error": self.error,
+-            "reason": self.reason,
+-        }
+-
+-    def to_prompt_text(self) -> str:
+-        parts = [
+-            f"time={self.iso}",
+-            f"backend={self.backend}",
+-            f"summary={self.summary}",
+-            f"confidence={self.confidence:.2f}",
+-        ]
+-        if self.scene:
+-            compact_scene = {
+-                "person_count": self.scene.get("person_count", 0),
+-                "close_obstacles": self.scene.get("close_obstacles", []),
+-                "object_zones": self.scene.get("object_zones", {}),
+-                "attention": self.scene.get("attention", "clear"),
+-            }
+-            parts.append(f"scene={compact_scene}")
+-        if self.objects:
+-            compact_objects = [
+-                {
+-                    "label": obj.get("label"),
+-                    "confidence": obj.get("confidence"),
+-                    "zone": obj.get("zone"),
+-                    "area_ratio": obj.get("area_ratio"),
+-                    "bbox": obj.get("bbox"),
+-                }
+-                for obj in self.objects[:6]
+-            ]
+-            parts.append(f"objects={compact_objects}")
+-        if self.motion:
+-            compact_motion = {
+-                "detected": self.motion.get("detected", False),
+-                "zone": self.motion.get("zone"),
+-                "changed_area_ratio": self.motion.get("changed_area_ratio"),
+-            }
+-            parts.append(f"motion={compact_motion}")
+-        if self.error:
+-            parts.append(f"error={self.error}")
+-        return "\n".join(parts)
+-
+-
+-class VisionService:
+-    """Converts camera frames into concise local scene observations.
+-
+-    The local LLM is text-only, so this service turns the Pi camera stream into
+-    structured text: known objects, rough zones, close-obstacle hints and motion.
+-    This is a useful computer-vision base for later navigation and interaction
+-    without the previous hand-control pipeline.
+-    """
+-
+-    def __init__(self, cfg, camera: CameraManager, logger=None) -> None:
+-        self.cfg = cfg
+-        self.camera = camera
+-        self.logger = logger
+-        self.enabled = bool(cfg.get("vision.enabled", False))
+-        self.poll_enabled = bool(cfg.get("vision.poll_enabled", True))
+-        self.poll_interval_s = float(cfg.get("vision.poll_interval_s", 2.0))
+-        self.max_prompt_age_s = float(cfg.get("vision.max_prompt_age_s", 3.0))
+-        self.snapshot_on_turn = bool(cfg.get("vision.snapshot_on_turn", True))
+-        self.always_attach = bool(cfg.get("vision.always_attach_to_prompt", True))
+-        self.log_poll_observations = bool(cfg.get("vision.log_poll_observations", False))
+-        self.analyzer = BasicVisionAnalyzer(cfg)
+-        self._latest: VisionObservation | None = None
+-        self._latest_lock = threading.RLock()
+-        self._analyze_lock = threading.Lock()
+-        self._listeners: list[Callable[[VisionObservation], None]] = []
+-        self._stop = threading.Event()
+-        self._thread: threading.Thread | None = None
+-
+-    def start(self) -> None:
+-        if not self.enabled:
+-            return
+-
+-        if not self.poll_enabled:
+-            self._log("vision", "info", "vision service enabled; background polling disabled")
+-            return
+-
+-        if self._thread and self._thread.is_alive():
+-            return
+-
+-        self._stop.clear()
+-        self._thread = threading.Thread(target=self._loop, name="voicepi-vision", daemon=True)
+-        self._thread.start()
+-        self._log("vision", "info", "vision service started")
+-
+-    def stop(self) -> None:
+-        self._stop.set()
+-        if self._thread and self._thread.is_alive():
+-            self._thread.join(timeout=2.0)
+-
+-    def add_listener(self, callback: Callable[[VisionObservation], None]) -> None:
+-        self._listeners.append(callback)
+-
+-    def latest(self) -> VisionObservation | None:
+-        with self._latest_lock:
+-            return self._latest
+-
+-    def analyze_now(self, reason: str = "manual") -> VisionObservation:
+-        if not self.enabled:
+-            obs = self._observation(False, "disabled", "vision disabled", reason=reason)
+-            self._publish(obs)
+-            return obs
+-        if not self.camera.enabled:
+-            obs = self._observation(False, "disabled", "camera disabled", reason=reason)
+-            self._publish(obs)
+-            return obs
+-        frame = self.camera.latest_jpeg()
+-        if not frame:
+-            obs = self._observation(False, "camera", "no camera frame available yet", reason=reason)
+-            self._publish(obs)
+-            return obs
+-
+-        if not self._analyze_lock.acquire(timeout=0.05):
+-            existing = self.latest()
+-            if existing:
+-                return existing
+-            self._analyze_lock.acquire()
+-        try:
+-            try:
+-                obs = self.analyzer.analyze(frame, reason=reason)
+-            except Exception as exc:
+-                obs = self._observation(False, "error", f"vision analysis failed: {exc}", error=str(exc), reason=reason)
+-            self._publish(obs)
+-            return obs
+-        finally:
+-            try:
+-                self._analyze_lock.release()
+-            except RuntimeError:
+-                pass
+-
+-    def context_for_prompt(self, user_text: str) -> str:
+-        if not self.enabled or not self.camera.enabled:
+-            return ""
+-        lower = user_text.casefold()
+-        vision_words = [
+-            "see", "seeing", "look", "camera", "frame", "image", "photo", "picture",
+-            "object", "objects", "recognize", "detect", "what is", "what are",
+-            "person", "face", "obstacle", "motion", "movement", "around", "nearby",
+-            "бач", "камера", "камер", "зір", "фото", "картин", "об'єкт", "обєкт",
+-            "предмет", "розпізн", "детект", "що бач", "людин", "облич", "перешкод",
+-            "рух", "руха", "навколо", "поруч",
+-        ]
+-        likely_visual = any(word in lower for word in vision_words)
+-
+-        obs = self.latest()
+-
+-        if self.snapshot_on_turn and (self.always_attach or likely_visual):
+-            obs = self.analyze_now(reason="turn")
+-
+-        if obs and (self.always_attach or likely_visual):
+-            fresh = (time.time() - obs.ts) <= self.max_prompt_age_s
+-            if fresh or likely_visual:
+-                return obs.to_prompt_text()
+-
+-        return ""
+-
+-    def status(self) -> dict[str, Any]:
+-        latest = self.latest()
+-
+-        analyzer_backend = "unavailable"
+-        detector_status: dict[str, Any] = {}
+-
+-        try:
+-            analyzer_backend = getattr(self.analyzer, "backend_name", "unknown")
+-        except Exception as exc:
+-            analyzer_backend = f"error: {exc}"
+-
+-        try:
+-            detector_status = self.analyzer.object_detector.status()
+-        except Exception as exc:
+-            detector_status = {
+-                "enabled": False,
+-                "backend": "error",
+-                "error": str(exc),
+-            }
+-
+-        return {
+-            "enabled": self.enabled,
+-            "poll_enabled": bool(getattr(self, "poll_enabled", True)),
+-            "backend": analyzer_backend,
+-            "object_detector": detector_status,
+-            "latest": latest.to_dict() if latest else None,
+-        }
+-
+-    def _loop(self) -> None:
+-        while not self._stop.is_set():
+-            try:
+-                self.analyze_now(reason="poll")
+-            except Exception as exc:
+-                self._log("vision", "error", f"vision loop failed: {exc}")
+-            self._stop.wait(self.poll_interval_s)
+-
+-    def _publish(self, obs: VisionObservation) -> None:
+-        with self._latest_lock:
+-            self._latest = obs
+-        should_log = obs.reason != "poll" or self.log_poll_observations or not obs.ok
+-        if should_log:
+-            self._log("vision", "info" if obs.ok else "warning", obs.summary, observation=obs.to_dict())
+-        for cb in list(self._listeners):
+-            try:
+-                cb(obs)
+-            except Exception:
+-                pass
+-
+-    def _observation(
+-        self,
+-        ok: bool,
+-        backend: str,
+-        summary: str,
+-        *,
+-        confidence: float = 0.0,
+-        objects: list[dict[str, Any]] | None = None,
+-        scene: dict[str, Any] | None = None,
+-        motion: dict[str, Any] | None = None,
+-        frame: dict[str, Any] | None = None,
+-        error: str | None = None,
+-        reason: str = "poll",
+-    ) -> VisionObservation:
+-        now = time.time()
+-        return VisionObservation(
+-            ok=ok,
+-            ts=now,
+-            iso=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
+-            backend=backend,
+-            summary=summary,
+-            confidence=confidence,
+-            objects=objects or [],
+-            scene=scene or {},
+-            motion=motion or {},
+-            frame=frame or {},
+-            error=error,
+-            reason=reason,
+-        )
+-
+-    def _log(self, source: str, level: str, message: str, **fields: Any) -> None:
+-        if self.logger is not None:
+-            try:
+-                self.logger.event(source, level, message, **fields)
+-            except Exception:
+-                pass
+-
+-
+-class BasicVisionAnalyzer:
+-    """Object + motion scene analyzer.
+-
+-    Kept under the old class name so the rest of the app does not need to know
+-    the implementation is now scene awareness.
+-    """
+-
+-    def __init__(self, cfg) -> None:
+-        self.cfg = cfg
+-        self.backend_name = "scene"
+-        self.object_detector = ObjectDetector(cfg)
+-        self._prev_gray = None
+-        self._prev_motion_ts = 0.0
+-
+-    def analyze(self, jpeg: bytes, reason: str = "poll") -> VisionObservation:
+-        now = time.time()
+-        iso = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
+-
+-        cv2, np = self._load_cv()
+-        if cv2 is None or np is None:
+-            return VisionObservation(
+-                ok=True,
+-                ts=now,
+-                iso=iso,
+-                backend="frame-only",
+-                summary="Camera frame is available. Install python3-opencv for object and motion detection.",
+-                confidence=0.2,
+-                frame={"jpeg_bytes": len(jpeg)},
+-                reason=reason,
+-            )
+-
+-        arr = np.frombuffer(jpeg, dtype=np.uint8)
+-        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+-        if image is None:
+-            return VisionObservation(
+-                ok=False,
+-                ts=now,
+-                iso=iso,
+-                backend="opencv",
+-                summary="Camera frame could not be decoded as JPEG.",
+-                confidence=0.0,
+-                error="decode_failed",
+-                reason=reason,
+-            )
+-
+-        height, width = image.shape[:2]
+-        frame = {"width": int(width), "height": int(height), "jpeg_bytes": len(jpeg)}
+-        objects = self.object_detector.detect(image, cv2, np)
+-        objects = [self._add_spatial_features(obj, width, height) for obj in objects]
+-        motion = self._detect_motion(image, cv2, np)
+-        scene = self._build_scene(objects, motion)
+-        summary = self._summary(objects, scene, motion)
+-        confidence = max(
+-            self._objects_confidence(objects),
+-            float(motion.get("confidence", 0.0) or 0.0),
+-            0.35 if objects or motion.get("detected") else 0.25,
+-        )
+-        self.backend_name = self._backend_name()
+-        return VisionObservation(
+-            ok=True,
+-            ts=now,
+-            iso=iso,
+-            backend=self.backend_name,
+-            summary=summary,
+-            confidence=round(min(1.0, confidence), 3),
+-            objects=objects,
+-            scene=scene,
+-            motion=motion,
+-            frame=frame,
+-            reason=reason,
+-        )
+-
+-    def _load_cv(self):
+-        try:
+-            import cv2  # type: ignore
+-            import numpy as np  # type: ignore
+-            return cv2, np
+-        except Exception:
+-            return None, None
+-
+-    def _backend_name(self) -> str:
+-        detector_backend = self.object_detector.backend_name or "no-objects"
+-        return f"scene:{detector_backend}+motion"
+-
+-    def _add_spatial_features(self, obj: dict[str, Any], width: int, height: int) -> dict[str, Any]:
+-        bbox = obj.get("bbox") or []
+-        enriched = dict(obj)
+-        try:
+-            x1, y1, x2, y2 = [int(v) for v in bbox]
+-            box_w = max(0, x2 - x1)
+-            box_h = max(0, y2 - y1)
+-            cx = (x1 + x2) / 2.0
+-            cy = (y1 + y2) / 2.0
+-            if cx < width / 3:
+-                zone = "left"
+-            elif cx > (width * 2) / 3:
+-                zone = "right"
+-            else:
+-                zone = "center"
+-            area_ratio = (box_w * box_h) / max(1, width * height)
+-            enriched.update({
+-                "zone": zone,
+-                "center": [round(cx / max(width, 1), 3), round(cy / max(height, 1), 3)],
+-                "area_ratio": round(float(area_ratio), 4),
+-            })
+-        except Exception:
+-            enriched.setdefault("zone", "unknown")
+-        return enriched
+-
+-    def _detect_motion(self, image, cv2, np) -> dict[str, Any]:
+-        if not bool(self.cfg.get("vision.motion.enabled", True)):
+-            return {"enabled": False, "detected": False}
+-        try:
+-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+-            if self._prev_gray is None:
+-                self._prev_gray = gray
+-                self._prev_motion_ts = time.time()
+-                return {"enabled": True, "detected": False, "reason": "priming"}
+-
+-            frame_delta = cv2.absdiff(self._prev_gray, gray)
+-            self._prev_gray = gray
+-            self._prev_motion_ts = time.time()
+-
+-            threshold = int(self.cfg.get("vision.motion.threshold", 24))
+-            _, thresh = cv2.threshold(frame_delta, threshold, 255, cv2.THRESH_BINARY)
+-            thresh = cv2.dilate(thresh, None, iterations=2)
+-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+-            height, width = image.shape[:2]
+-            frame_area = max(1, width * height)
+-            min_area_ratio = float(self.cfg.get("vision.motion.min_area_ratio", 0.01))
+-            min_area = frame_area * min_area_ratio
+-            moving = []
+-            for contour in contours:
+-                area = float(cv2.contourArea(contour))
+-                if area < min_area:
+-                    continue
+-                x, y, w, h = cv2.boundingRect(contour)
+-                cx = x + w / 2.0
+-                zone = "left" if cx < width / 3 else ("right" if cx > width * 2 / 3 else "center")
+-                moving.append({"area": area, "bbox": [int(x), int(y), int(x + w), int(y + h)], "zone": zone})
+-            if not moving:
+-                return {"enabled": True, "detected": False, "changed_area_ratio": 0.0, "contours": 0}
+-            total_area_ratio = sum(item["area"] for item in moving) / frame_area
+-            largest = max(moving, key=lambda item: item["area"])
+-            confidence = min(1.0, 0.35 + total_area_ratio * 4.0)
+-            return {
+-                "enabled": True,
+-                "detected": True,
+-                "zone": largest["zone"],
+-                "bbox": largest["bbox"],
+-                "changed_area_ratio": round(float(total_area_ratio), 4),
+-                "contours": len(moving),
+-                "confidence": round(float(confidence), 3),
+-            }
+-        except Exception as exc:
+-            return {"enabled": True, "detected": False, "error": str(exc)}
+-
+-    def _build_scene(self, objects: list[dict[str, Any]], motion: dict[str, Any]) -> dict[str, Any]:
+-        object_zones = {"left": [], "center": [], "right": [], "unknown": []}
+-        close_threshold = float(self.cfg.get("vision.obstacle_area_ratio", 0.10))
+-        close_obstacles = []
+-        person_count = 0
+-        face_count = 0
+-        for obj in objects:
+-            label = str(obj.get("label", "object"))
+-            zone = str(obj.get("zone", "unknown"))
+-            if zone not in object_zones:
+-                zone = "unknown"
+-            object_zones[zone].append(label)
+-            if label == "person":
+-                person_count += 1
+-            if "face" in label:
+-                face_count += 1
+-            area_ratio = float(obj.get("area_ratio", 0.0) or 0.0)
+-            if label in OBSTACLE_LABELS and area_ratio >= close_threshold:
+-                close_obstacles.append({
+-                    "label": label,
+-                    "zone": zone,
+-                    "area_ratio": round(area_ratio, 4),
+-                    "confidence": obj.get("confidence"),
+-                })
+-        object_zones = {k: v[:5] for k, v in object_zones.items() if v}
+-        attention = "clear"
+-        if close_obstacles:
+-            attention = "obstacle_close"
+-        elif person_count or face_count:
+-            attention = "person_visible"
+-        elif motion.get("detected"):
+-            attention = "motion_visible"
+-        return {
+-            "person_count": person_count,
+-            "face_count": face_count,
+-            "object_count": len(objects),
+-            "object_zones": object_zones,
+-            "close_obstacles": close_obstacles[:4],
+-            "attention": attention,
+-        }
+-
+-    def _summary(self, objects: list[dict[str, Any]], scene: dict[str, Any], motion: dict[str, Any]) -> str:
+-        parts: list[str] = []
+-        if objects:
+-            visible = []
+-            for obj in objects[:5]:
+-                label = obj.get("label", "object")
+-                zone = obj.get("zone", "unknown")
+-                conf = obj.get("confidence")
+-                conf_text = f" {float(conf):.2f}" if isinstance(conf, (int, float)) else ""
+-                visible.append(f"{label} in {zone}{conf_text}")
+-            parts.append("Objects: " + ", ".join(visible) + ".")
+-        else:
+-            detector_ready = self.object_detector.status().get("model_ready")
+-            if detector_ready:
+-                parts.append("No known objects detected in the current frame.")
+-            else:
+-                parts.append("Camera frame available; object model files are missing, so only motion/face fallback may work.")
+-
+-        if motion.get("detected"):
+-            parts.append(f"Motion detected in the {motion.get('zone', 'unknown')} zone.")
+-        else:
+-            parts.append("No significant motion detected.")
+-
+-        close_obstacles = scene.get("close_obstacles") or []
+-        if close_obstacles:
+-            labels = ", ".join(f"{o.get('label')} in {o.get('zone')}" for o in close_obstacles[:3])
+-            parts.append(f"Possible close obstacle: {labels}.")
+-        return " ".join(parts)
+-
+-    def _objects_confidence(self, objects: list[dict[str, Any]]) -> float:
+-        if not objects:
+-            return 0.0
+-        try:
+-            return max(float(obj.get("confidence", 0.0)) for obj in objects)
+-        except Exception:
+-            return 0.0
+-
+-
+-class ObjectDetector:
+-    def __init__(self, cfg) -> None:
+-        self.cfg = cfg
+-        self.enabled = bool(cfg.get("vision.object_detection.enabled", True))
+-        self.model_path = Path(str(cfg.path("vision.object_detection.model_path", "models/vision/mobilenet_iter_73000.caffemodel")))
+-        self.config_path = Path(str(cfg.path("vision.object_detection.config_path", "models/vision/deploy.prototxt")))
+-        self.confidence_threshold = float(cfg.get("vision.object_detection.confidence_threshold", 0.45))
+-        self.max_objects = int(cfg.get("vision.object_detection.max_objects", 6))
+-        self.backend_name = "disabled" if not self.enabled else "opencv-dnn"
+-        self._net = None
+-        self._load_error: str | None = None
+-        self._haar_loaded = False
+-        self._face_cascade = None
+-        self.backend = str(cfg.get("vision.object_detection.backend", "mobilenet")).strip().lower()
+-        self.yolo_imgsz = int(cfg.get("vision.object_detection.imgsz", 416))
+-        self._yolo = None
+-
+-    def status(self) -> dict[str, Any]:
+-        return {
+-            "enabled": self.enabled,
+-            "backend": self.backend_name,
+-            "model_path": str(self.model_path),
+-            "config_path": str(self.config_path),
+-            "model_ready": self.model_path.exists() and self.config_path.exists(),
+-            "error": self._load_error,
+-        }
+-
+-    def detect(self, image, cv2, np) -> list[dict[str, Any]]:
+-        if not self.enabled:
+-            return []
+-
+-        if self.backend == "yolo":
+-            yolo_objects = self._detect_with_yolo(image)
+-            if yolo_objects:
+-                return yolo_objects
+-
+-        dnn_objects = self._detect_with_dnn(image, cv2, np)
+-        if dnn_objects:
+-            return dnn_objects
+-
+-        return self._detect_fallback_faces(image, cv2)
+-    def _detect_with_yolo(self, image) -> list[dict[str, Any]]:
+-        try:
+-            if self._yolo is None:
+-                from ultralytics import YOLO  # type: ignore
+-
+-                self._yolo = YOLO(str(self.model_path))
+-                self.backend_name = "ultralytics-yolo"
+-
+-            results = self._yolo.predict(
+-                image,
+-                imgsz=self.yolo_imgsz,
+-                conf=self.confidence_threshold,
+-                max_det=self.max_objects,
+-                verbose=False,
+-                device="cpu",
+-            )
+-        except Exception as exc:
+-            self._load_error = f"yolo failed: {exc}"
+-            self.backend_name = "yolo-error"
+-            return []
+-
+-        objects: list[dict[str, Any]] = []
+-
+-        try:
+-            if not results:
+-                return []
+-
+-            result = results[0]
+-            names = getattr(result, "names", {}) or {}
+-
+-            for box in result.boxes:
+-                xyxy = box.xyxy[0].detach().cpu().numpy().tolist()
+-                conf = float(box.conf[0].detach().cpu().item())
+-                cls_id = int(box.cls[0].detach().cpu().item())
+-
+-                label = names.get(cls_id, f"class_{cls_id}") if isinstance(names, dict) else f"class_{cls_id}"
+-
+-                x1, y1, x2, y2 = [int(v) for v in xyxy]
+-
+-                objects.append({
+-                    "label": str(label),
+-                    "confidence": round(conf, 3),
+-                    "bbox": [x1, y1, x2, y2],
+-                    "class_id": cls_id,
+-                    "detector": "yolo",
+-                })
+-        except Exception as exc:
+-            self._load_error = f"yolo parse failed: {exc}"
+-            return []
+-
+-        objects.sort(key=lambda obj: float(obj.get("confidence", 0.0)), reverse=True)
+-        return objects[: self.max_objects]
+-    def _detect_with_dnn(self, image, cv2, np) -> list[dict[str, Any]]:
+-        if not (self.model_path.exists() and self.config_path.exists()):
+-            self._load_error = "object model files are missing; run: python scripts/download_models.py --skip-llm --skip-stt --skip-tts --vision mobilenet-ssd"
+-            return []
+-        try:
+-            if self._net is None:
+-                self._net = cv2.dnn.readNetFromCaffe(str(self.config_path), str(self.model_path))
+-                self.backend_name = "opencv-dnn"
+-            h, w = image.shape[:2]
+-            blob = cv2.dnn.blobFromImage(image, 0.007843, (300, 300), (127.5, 127.5, 127.5), False, False)
+-            self._net.setInput(blob)
+-            detections = self._net.forward()
+-        except Exception as exc:
+-            self._load_error = str(exc)
+-            self._net = None
+-            return []
+-
+-        objects: list[dict[str, Any]] = []
+-        try:
+-            for i in range(detections.shape[2]):
+-                confidence = float(detections[0, 0, i, 2])
+-                if confidence < self.confidence_threshold:
+-                    continue
+-                class_id = int(detections[0, 0, i, 1])
+-                label = VOC_CLASSES[class_id] if 0 <= class_id < len(VOC_CLASSES) else f"class_{class_id}"
+-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+-                start_x, start_y, end_x, end_y = box.astype("int")
+-                start_x = max(0, min(int(start_x), w - 1))
+-                start_y = max(0, min(int(start_y), h - 1))
+-                end_x = max(0, min(int(end_x), w - 1))
+-                end_y = max(0, min(int(end_y), h - 1))
+-                objects.append({
+-                    "label": label,
+-                    "confidence": round(confidence, 3),
+-                    "bbox": [start_x, start_y, end_x, end_y],
+-                })
+-        except Exception as exc:
+-            self._load_error = f"dnn parse failed: {exc}"
+-            return []
+-
+-        objects.sort(key=lambda obj: float(obj.get("confidence", 0.0)), reverse=True)
+-        return objects[: self.max_objects]
+-
+-    def _detect_fallback_faces(self, image, cv2) -> list[dict[str, Any]]:
+-        try:
+-            if not self._haar_loaded:
+-                cascade_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+-                self._face_cascade = cv2.CascadeClassifier(cascade_path)
+-                self._haar_loaded = True
+-                self.backend_name = "opencv-haar-fallback"
+-            if self._face_cascade is None or self._face_cascade.empty():
+-                return []
+-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+-            faces = self._face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(45, 45))
+-        except Exception:
+-            return []
+-
+-        objects = []
+-        for (x, y, w, h) in list(faces)[: self.max_objects]:
+-            objects.append({
+-                "label": "face/person",
+-                "confidence": 0.55,
+-                "bbox": [int(x), int(y), int(x + w), int(y + h)],
+-            })
+-        return objects
++from __future__ import annotations
++
++import threading
++import time
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any, Callable
++
++from .camera import CameraManager
++
++
++VOC_CLASSES = [
++    "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
++    "cat", "chair", "cow", "dining table", "dog", "horse", "motorbike", "person",
++    "potted plant", "sheep", "sofa", "train", "tv monitor",
++]
++
++OBSTACLE_LABELS = {
++    "person", "chair", "dining table", "sofa", "bottle", "cat", "dog", "car", "bus",
++    "bicycle", "motorbike", "potted plant", "tv monitor",
++}
++
++
++@dataclass(frozen=True)
++class VisionObservation:
++    ok: bool
++    ts: float
++    iso: str
++    backend: str
++    summary: str
++    confidence: float = 0.0
++    objects: list[dict[str, Any]] = field(default_factory=list)
++    scene: dict[str, Any] = field(default_factory=dict)
++    motion: dict[str, Any] = field(default_factory=dict)
++    frame: dict[str, Any] = field(default_factory=dict)
++    error: str | None = None
++    reason: str = "poll"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "ok": self.ok,
++            "ts": self.ts,
++            "iso": self.iso,
++            "backend": self.backend,
++            "summary": self.summary,
++            "confidence": self.confidence,
++            "objects": self.objects,
++            "scene": self.scene,
++            "motion": self.motion,
++            "frame": self.frame,
++            "error": self.error,
++            "reason": self.reason,
++        }
++
++    def to_prompt_text(self) -> str:
++        parts = [
++            f"time={self.iso}",
++            f"backend={self.backend}",
++            f"summary={self.summary}",
++            f"confidence={self.confidence:.2f}",
++        ]
++        if self.scene:
++            compact_scene = {
++                "person_count": self.scene.get("person_count", 0),
++                "close_obstacles": self.scene.get("close_obstacles", []),
++                "object_zones": self.scene.get("object_zones", {}),
++                "attention": self.scene.get("attention", "clear"),
++            }
++            parts.append(f"scene={compact_scene}")
++        if self.objects:
++            compact_objects = [
++                {
++                    "label": obj.get("label"),
++                    "confidence": obj.get("confidence"),
++                    "zone": obj.get("zone"),
++                    "area_ratio": obj.get("area_ratio"),
++                    "bbox": obj.get("bbox"),
++                }
++                for obj in self.objects[:6]
++            ]
++            parts.append(f"objects={compact_objects}")
++        if self.motion:
++            compact_motion = {
++                "detected": self.motion.get("detected", False),
++                "zone": self.motion.get("zone"),
++                "changed_area_ratio": self.motion.get("changed_area_ratio"),
++            }
++            parts.append(f"motion={compact_motion}")
++        if self.error:
++            parts.append(f"error={self.error}")
++        return "\n".join(parts)
++
++
++class VisionService:
++    """Converts camera frames into concise local scene observations.
++
++    The local LLM is text-only, so this service turns the Pi camera stream into
++    structured text: known objects, rough zones, close-obstacle hints and motion.
++    This is a useful computer-vision base for later navigation and interaction
++    without the previous hand-control pipeline.
++    """
++
++    def __init__(self, cfg, camera: CameraManager, logger=None) -> None:
++        self.cfg = cfg
++        self.camera = camera
++        self.logger = logger
++        self.enabled = bool(cfg.get("vision.enabled", False))
++        self.poll_enabled = bool(cfg.get("vision.poll_enabled", True))
++        self.poll_interval_s = float(cfg.get("vision.poll_interval_s", 2.0))
++        self.max_prompt_age_s = float(cfg.get("vision.max_prompt_age_s", 3.0))
++        self.snapshot_on_turn = bool(cfg.get("vision.snapshot_on_turn", True))
++        self.always_attach = bool(cfg.get("vision.always_attach_to_prompt", True))
++        self.log_poll_observations = bool(cfg.get("vision.log_poll_observations", False))
++        self.analyzer = BasicVisionAnalyzer(cfg)
++        self._latest: VisionObservation | None = None
++        self._latest_lock = threading.RLock()
++        self._analyze_lock = threading.Lock()
++        self._listeners: list[Callable[[VisionObservation], None]] = []
++        self._stop = threading.Event()
++        self._thread: threading.Thread | None = None
++
++    def start(self) -> None:
++        if not self.enabled:
++            return
++
++        if not self.poll_enabled:
++            self._log("vision", "info", "vision service enabled; background polling disabled")
++            return
++
++        if self._thread and self._thread.is_alive():
++            return
++
++        self._stop.clear()
++        self._thread = threading.Thread(target=self._loop, name="voicepi-vision", daemon=True)
++        self._thread.start()
++        self._log("vision", "info", "vision service started")
++
++    def stop(self) -> None:
++        self._stop.set()
++        if self._thread and self._thread.is_alive():
++            self._thread.join(timeout=2.0)
++
++    def add_listener(self, callback: Callable[[VisionObservation], None]) -> None:
++        self._listeners.append(callback)
++
++    def latest(self) -> VisionObservation | None:
++        with self._latest_lock:
++            return self._latest
++
++    def analyze_now(self, reason: str = "manual") -> VisionObservation:
++        if not self.enabled:
++            obs = self._observation(False, "disabled", "vision disabled", reason=reason)
++            self._publish(obs)
++            return obs
++        if not self.camera.enabled:
++            obs = self._observation(False, "disabled", "camera disabled", reason=reason)
++            self._publish(obs)
++            return obs
++        frame = self.camera.latest_jpeg()
++        if not frame:
++            obs = self._observation(False, "camera", "no camera frame available yet", reason=reason)
++            self._publish(obs)
++            return obs
++
++        if not self._analyze_lock.acquire(timeout=0.05):
++            existing = self.latest()
++            if existing:
++                return existing
++            self._analyze_lock.acquire()
++        try:
++            try:
++                obs = self.analyzer.analyze(frame, reason=reason)
++            except Exception as exc:
++                obs = self._observation(False, "error", f"vision analysis failed: {exc}", error=str(exc), reason=reason)
++            self._publish(obs)
++            return obs
++        finally:
++            try:
++                self._analyze_lock.release()
++            except RuntimeError:
++                pass
++
++    def context_for_prompt(self, user_text: str) -> str:
++        if not self.enabled or not self.camera.enabled:
++            return ""
++        lower = user_text.casefold()
++        vision_words = [
++            "see", "seeing", "look", "camera", "frame", "image", "photo", "picture",
++            "object", "objects", "recognize", "detect", "what is", "what are",
++            "person", "face", "obstacle", "motion", "movement", "around", "nearby",
++            "бач", "камера", "камер", "зір", "фото", "картин", "об'єкт", "обєкт",
++            "предмет", "розпізн", "детект", "що бач", "людин", "облич", "перешкод",
++            "рух", "руха", "навколо", "поруч",
++        ]
++        likely_visual = any(word in lower for word in vision_words)
++
++        obs = self.latest()
++
++        if self.snapshot_on_turn and (self.always_attach or likely_visual):
++            obs = self.analyze_now(reason="turn")
++
++        if obs and (self.always_attach or likely_visual):
++            fresh = (time.time() - obs.ts) <= self.max_prompt_age_s
++            if fresh or likely_visual:
++                return obs.to_prompt_text()
++
++        return ""
++
++    def status(self) -> dict[str, Any]:
++        latest = self.latest()
++
++        analyzer_backend = "unavailable"
++        detector_status: dict[str, Any] = {}
++
++        try:
++            analyzer_backend = getattr(self.analyzer, "backend_name", "unknown")
++        except Exception as exc:
++            analyzer_backend = f"error: {exc}"
++
++        try:
++            detector_status = self.analyzer.object_detector.status()
++        except Exception as exc:
++            detector_status = {
++                "enabled": False,
++                "backend": "error",
++                "error": str(exc),
++            }
++
++        return {
++            "enabled": self.enabled,
++            "poll_enabled": bool(getattr(self, "poll_enabled", True)),
++            "backend": analyzer_backend,
++            "object_detector": detector_status,
++            "latest": latest.to_dict() if latest else None,
++        }
++
++    def _loop(self) -> None:
++        while not self._stop.is_set():
++            try:
++                self.analyze_now(reason="poll")
++            except Exception as exc:
++                self._log("vision", "error", f"vision loop failed: {exc}")
++            self._stop.wait(self.poll_interval_s)
++
++    def _publish(self, obs: VisionObservation) -> None:
++        with self._latest_lock:
++            self._latest = obs
++        should_log = obs.reason != "poll" or self.log_poll_observations or not obs.ok
++        if should_log:
++            self._log("vision", "info" if obs.ok else "warning", obs.summary, observation=obs.to_dict())
++        for cb in list(self._listeners):
++            try:
++                cb(obs)
++            except Exception:
++                pass
++
++    def _observation(
++        self,
++        ok: bool,
++        backend: str,
++        summary: str,
++        *,
++        confidence: float = 0.0,
++        objects: list[dict[str, Any]] | None = None,
++        scene: dict[str, Any] | None = None,
++        motion: dict[str, Any] | None = None,
++        frame: dict[str, Any] | None = None,
++        error: str | None = None,
++        reason: str = "poll",
++    ) -> VisionObservation:
++        now = time.time()
++        return VisionObservation(
++            ok=ok,
++            ts=now,
++            iso=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
++            backend=backend,
++            summary=summary,
++            confidence=confidence,
++            objects=objects or [],
++            scene=scene or {},
++            motion=motion or {},
++            frame=frame or {},
++            error=error,
++            reason=reason,
++        )
++
++    def _log(self, source: str, level: str, message: str, **fields: Any) -> None:
++        if self.logger is not None:
++            try:
++                self.logger.event(source, level, message, **fields)
++            except Exception:
++                pass
++
++
++class BasicVisionAnalyzer:
++    """Object + motion scene analyzer.
++
++    Kept under the old class name so the rest of the app does not need to know
++    the implementation is now scene awareness.
++    """
++
++    def __init__(self, cfg) -> None:
++        self.cfg = cfg
++        self.backend_name = "scene"
++        self.object_detector = ObjectDetector(cfg)
++        self._prev_gray = None
++        self._prev_motion_ts = 0.0
++
++    def analyze(self, jpeg: bytes, reason: str = "poll") -> VisionObservation:
++        now = time.time()
++        iso = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
++
++        cv2, np = self._load_cv()
++        if cv2 is None or np is None:
++            return VisionObservation(
++                ok=True,
++                ts=now,
++                iso=iso,
++                backend="frame-only",
++                summary="Camera frame is available. Install python3-opencv for object and motion detection.",
++                confidence=0.2,
++                frame={"jpeg_bytes": len(jpeg)},
++                reason=reason,
++            )
++
++        arr = np.frombuffer(jpeg, dtype=np.uint8)
++        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
++        if image is None:
++            return VisionObservation(
++                ok=False,
++                ts=now,
++                iso=iso,
++                backend="opencv",
++                summary="Camera frame could not be decoded as JPEG.",
++                confidence=0.0,
++                error="decode_failed",
++                reason=reason,
++            )
++
++        height, width = image.shape[:2]
++        frame = {"width": int(width), "height": int(height), "jpeg_bytes": len(jpeg)}
++        objects = self.object_detector.detect(image, cv2, np)
++        objects = [self._add_spatial_features(obj, width, height) for obj in objects]
++        motion = self._detect_motion(image, cv2, np)
++        scene = self._build_scene(objects, motion)
++        summary = self._summary(objects, scene, motion)
++        confidence = max(
++            self._objects_confidence(objects),
++            float(motion.get("confidence", 0.0) or 0.0),
++            0.35 if objects or motion.get("detected") else 0.25,
++        )
++        self.backend_name = self._backend_name()
++        return VisionObservation(
++            ok=True,
++            ts=now,
++            iso=iso,
++            backend=self.backend_name,
++            summary=summary,
++            confidence=round(min(1.0, confidence), 3),
++            objects=objects,
++            scene=scene,
++            motion=motion,
++            frame=frame,
++            reason=reason,
++        )
++
++    def _load_cv(self):
++        try:
++            import cv2  # type: ignore
++            import numpy as np  # type: ignore
++            return cv2, np
++        except Exception:
++            return None, None
++
++    def _backend_name(self) -> str:
++        detector_backend = self.object_detector.backend_name or "no-objects"
++        return f"scene:{detector_backend}+motion"
++
++    def _add_spatial_features(self, obj: dict[str, Any], width: int, height: int) -> dict[str, Any]:
++        bbox = obj.get("bbox") or []
++        enriched = dict(obj)
++        try:
++            x1, y1, x2, y2 = [int(v) for v in bbox]
++            box_w = max(0, x2 - x1)
++            box_h = max(0, y2 - y1)
++            cx = (x1 + x2) / 2.0
++            cy = (y1 + y2) / 2.0
++            if cx < width / 3:
++                zone = "left"
++            elif cx > (width * 2) / 3:
++                zone = "right"
++            else:
++                zone = "center"
++            area_ratio = (box_w * box_h) / max(1, width * height)
++            enriched.update({
++                "zone": zone,
++                "center": [round(cx / max(width, 1), 3), round(cy / max(height, 1), 3)],
++                "area_ratio": round(float(area_ratio), 4),
++            })
++        except Exception:
++            enriched.setdefault("zone", "unknown")
++        return enriched
++
++    def _detect_motion(self, image, cv2, np) -> dict[str, Any]:
++        if not bool(self.cfg.get("vision.motion.enabled", True)):
++            return {"enabled": False, "detected": False}
++        try:
++            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
++            gray = cv2.GaussianBlur(gray, (21, 21), 0)
++            if self._prev_gray is None:
++                self._prev_gray = gray
++                self._prev_motion_ts = time.time()
++                return {"enabled": True, "detected": False, "reason": "priming"}
++
++            frame_delta = cv2.absdiff(self._prev_gray, gray)
++            self._prev_gray = gray
++            self._prev_motion_ts = time.time()
++
++            threshold = int(self.cfg.get("vision.motion.threshold", 24))
++            _, thresh = cv2.threshold(frame_delta, threshold, 255, cv2.THRESH_BINARY)
++            thresh = cv2.dilate(thresh, None, iterations=2)
++            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
++            height, width = image.shape[:2]
++            frame_area = max(1, width * height)
++            min_area_ratio = float(self.cfg.get("vision.motion.min_area_ratio", 0.01))
++            min_area = frame_area * min_area_ratio
++            moving = []
++            for contour in contours:
++                area = float(cv2.contourArea(contour))
++                if area < min_area:
++                    continue
++                x, y, w, h = cv2.boundingRect(contour)
++                cx = x + w / 2.0
++                zone = "left" if cx < width / 3 else ("right" if cx > width * 2 / 3 else "center")
++                moving.append({"area": area, "bbox": [int(x), int(y), int(x + w), int(y + h)], "zone": zone})
++            if not moving:
++                return {"enabled": True, "detected": False, "changed_area_ratio": 0.0, "contours": 0}
++            total_area_ratio = sum(item["area"] for item in moving) / frame_area
++            largest = max(moving, key=lambda item: item["area"])
++            confidence = min(1.0, 0.35 + total_area_ratio * 4.0)
++            return {
++                "enabled": True,
++                "detected": True,
++                "zone": largest["zone"],
++                "bbox": largest["bbox"],
++                "changed_area_ratio": round(float(total_area_ratio), 4),
++                "contours": len(moving),
++                "confidence": round(float(confidence), 3),
++            }
++        except Exception as exc:
++            return {"enabled": True, "detected": False, "error": str(exc)}
++
++    def _build_scene(self, objects: list[dict[str, Any]], motion: dict[str, Any]) -> dict[str, Any]:
++        object_zones = {"left": [], "center": [], "right": [], "unknown": []}
++        close_threshold = float(self.cfg.get("vision.obstacle_area_ratio", 0.10))
++        close_obstacles = []
++        person_count = 0
++        face_count = 0
++        for obj in objects:
++            label = str(obj.get("label", "object"))
++            zone = str(obj.get("zone", "unknown"))
++            if zone not in object_zones:
++                zone = "unknown"
++            object_zones[zone].append(label)
++            if label == "person":
++                person_count += 1
++            if "face" in label:
++                face_count += 1
++            area_ratio = float(obj.get("area_ratio", 0.0) or 0.0)
++            if label in OBSTACLE_LABELS and area_ratio >= close_threshold:
++                close_obstacles.append({
++                    "label": label,
++                    "zone": zone,
++                    "area_ratio": round(area_ratio, 4),
++                    "confidence": obj.get("confidence"),
++                })
++        object_zones = {k: v[:5] for k, v in object_zones.items() if v}
++        attention = "clear"
++        if close_obstacles:
++            attention = "obstacle_close"
++        elif person_count or face_count:
++            attention = "person_visible"
++        elif motion.get("detected"):
++            attention = "motion_visible"
++        return {
++            "person_count": person_count,
++            "face_count": face_count,
++            "object_count": len(objects),
++            "object_zones": object_zones,
++            "close_obstacles": close_obstacles[:4],
++            "attention": attention,
++        }
++
++    def _summary(self, objects: list[dict[str, Any]], scene: dict[str, Any], motion: dict[str, Any]) -> str:
++        parts: list[str] = []
++        if objects:
++            visible = []
++            for obj in objects[:5]:
++                label = obj.get("label", "object")
++                zone = obj.get("zone", "unknown")
++                conf = obj.get("confidence")
++                conf_text = f" {float(conf):.2f}" if isinstance(conf, (int, float)) else ""
++                visible.append(f"{label} in {zone}{conf_text}")
++            parts.append("Objects: " + ", ".join(visible) + ".")
++        else:
++            detector_ready = self.object_detector.status().get("model_ready")
++            if detector_ready:
++                parts.append("No known objects detected in the current frame.")
++            else:
++                parts.append("Camera frame available; object model files are missing, so only motion/face fallback may work.")
++
++        if motion.get("detected"):
++            parts.append(f"Motion detected in the {motion.get('zone', 'unknown')} zone.")
++        else:
++            parts.append("No significant motion detected.")
++
++        close_obstacles = scene.get("close_obstacles") or []
++        if close_obstacles:
++            labels = ", ".join(f"{o.get('label')} in {o.get('zone')}" for o in close_obstacles[:3])
++            parts.append(f"Possible close obstacle: {labels}.")
++        return " ".join(parts)
++
++    def _objects_confidence(self, objects: list[dict[str, Any]]) -> float:
++        if not objects:
++            return 0.0
++        try:
++            return max(float(obj.get("confidence", 0.0)) for obj in objects)
++        except Exception:
++            return 0.0
++
++
++class ObjectDetector:
++    def __init__(self, cfg) -> None:
++        self.cfg = cfg
++        self.enabled = bool(cfg.get("vision.object_detection.enabled", True))
++        self.model_path = Path(str(cfg.path("vision.object_detection.model_path", "models/vision/mobilenet_iter_73000.caffemodel")))
++        self.config_path = Path(str(cfg.path("vision.object_detection.config_path", "models/vision/deploy.prototxt")))
++        self.confidence_threshold = float(cfg.get("vision.object_detection.confidence_threshold", 0.45))
++        self.max_objects = int(cfg.get("vision.object_detection.max_objects", 6))
++        self.backend_name = "disabled" if not self.enabled else "opencv-dnn"
++        self._net = None
++        self._load_error: str | None = None
++        self._haar_loaded = False
++        self._face_cascade = None
++        self.backend = str(cfg.get("vision.object_detection.backend", "mobilenet")).strip().lower()
++        self.yolo_imgsz = int(cfg.get("vision.object_detection.imgsz", 416))
++        self._yolo = None
++        self._yolo_input_name: str | None = None
++        self._yolo_model_file: str | None = None
++
++    def status(self) -> dict[str, Any]:
++        return {
++            "enabled": self.enabled,
++            "backend": self.backend_name,
++            "model_path": str(self.model_path),
++            "config_path": str(self.config_path),
++            "model_ready": self.model_path.exists() and self.config_path.exists(),
++            "error": self._load_error,
++        }
++
++    def detect(self, image, cv2, np) -> list[dict[str, Any]]:
++        if not self.enabled:
++            return []
++
++        if self.backend == "yolo":
++            yolo_objects = self._detect_with_yolo(image)
++            if yolo_objects:
++                return yolo_objects
++
++        dnn_objects = self._detect_with_dnn(image, cv2, np)
++        if dnn_objects:
++            return dnn_objects
++
++        return self._detect_fallback_faces(image, cv2)
++    # COCO-80 class names (used by YOLOv11n trained on COCO dataset)
++    _COCO_NAMES = [
++        "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
++        "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
++        "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
++        "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
++        "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
++        "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
++        "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
++        "couch","potted plant","bed","dining table","toilet","tv","laptop","mouse",
++        "remote","keyboard","cell phone","microwave","oven","toaster","sink",
++        "refrigerator","book","clock","vase","scissors","teddy bear","hair drier",
++        "toothbrush",
++    ]
++
++    def _detect_with_yolo(self, image) -> list[dict[str, Any]]:
++        """YOLO inference via ONNX Runtime -- no PyTorch / ultralytics needed."""
++        import numpy as np  # type: ignore
++
++        try:
++            if self._yolo is None:
++                import onnxruntime as ort  # type: ignore
++
++                # Look for the model in several candidate locations.
++                candidates = [
++                    self.model_path,
++                    self.model_path.parent / "yolo11n.onnx",
++                    self.model_path.parent.parent / "yolo11n.onnx",
++                ]
++                model_file = None
++                for c in candidates:
++                    if c.exists():
++                        model_file = c
++                        break
++
++                if model_file is None:
++                    self._load_error = (
++                        f"YOLO model not found -- checked: {[str(c) for c in candidates]}. "
++                        "Run: python scripts/download_models.py --vision yolo"
++                    )
++                    return []
++
++                opts = ort.SessionOptions()
++                opts.inter_op_num_threads = 2
++                opts.intra_op_num_threads = 2
++                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
++                self._yolo = ort.InferenceSession(str(model_file), sess_options=opts)
++                self._yolo_input_name = self._yolo.get_inputs()[0].name
++                self._yolo_model_file = str(model_file)
++                self.backend_name = "onnxruntime-yolo"
++
++        except Exception as exc:
++            self._load_error = f"YOLO ONNX load failed: {exc}"
++            self.backend_name = "yolo-error"
++            return []
++
++        try:
++            orig_h, orig_w = image.shape[:2]
++            imgsz = self.yolo_imgsz
++
++            # Letterbox resize (preserve aspect ratio, pad with grey 114).
++            scale = min(imgsz / orig_w, imgsz / orig_h)
++            new_w, new_h = int(orig_w * scale), int(orig_h * scale)
++            pad_x = (imgsz - new_w) // 2
++            pad_y = (imgsz - new_h) // 2
++
++            import cv2  # type: ignore
++            resized = cv2.resize(image, (new_w, new_h))
++            canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
++            canvas[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = resized
++
++            # BGR -> RGB, HWC -> NCHW, normalize 0-1.
++            blob = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
++            blob = np.expand_dims(blob.transpose(2, 0, 1), 0)  # [1, 3, H, W]
++
++            raw = self._yolo.run(None, {self._yolo_input_name: blob})[0]  # [1, 84, anchors]
++
++            # raw shape: [1, 84, N] -> transpose to [N, 84]
++            preds = raw[0].T  # [N, 84]
++
++            cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
++            class_scores = preds[:, 4:]               # [N, 80]
++            class_ids = np.argmax(class_scores, axis=1)
++            confidences = class_scores[np.arange(len(class_scores)), class_ids]
++
++            keep = confidences >= self.confidence_threshold
++            cx, cy, bw, bh = cx[keep], cy[keep], bw[keep], bh[keep]
++            confidences = confidences[keep]
++            class_ids = class_ids[keep]
++
++            if len(confidences) == 0:
++                return []
++
++            # Convert letterbox coords back to original image coords.
++            x1s = ((cx - bw / 2) - pad_x) / scale
++            y1s = ((cy - bh / 2) - pad_y) / scale
++            x2s = ((cx + bw / 2) - pad_x) / scale
++            y2s = ((cy + bh / 2) - pad_y) / scale
++
++            x1s = np.clip(x1s, 0, orig_w).astype(int)
++            y1s = np.clip(y1s, 0, orig_h).astype(int)
++            x2s = np.clip(x2s, 0, orig_w).astype(int)
++            y2s = np.clip(y2s, 0, orig_h).astype(int)
++
++            # cv2 NMS expects [x, y, w, h] and float lists.
++            boxes_xywh = [[int(x1s[i]), int(y1s[i]), int(x2s[i] - x1s[i]), int(y2s[i] - y1s[i])]
++                          for i in range(len(confidences))]
++            nms_idx = cv2.dnn.NMSBoxes(
++                boxes_xywh,
++                confidences.tolist(),
++                self.confidence_threshold,
++                float(self.cfg.get("vision.object_detection.nms_threshold", 0.45)),
++            )
++            if len(nms_idx) == 0:
++                return []
++
++            nms_idx = nms_idx.flatten()
++            objects = []
++            for i in nms_idx[: self.max_objects]:
++                cls_id = int(class_ids[i])
++                label = (
++                    self._COCO_NAMES[cls_id]
++                    if 0 <= cls_id < len(self._COCO_NAMES)
++                    else f"class_{cls_id}"
++                )
++                objects.append({
++                    "label": label,
++                    "confidence": round(float(confidences[i]), 3),
++                    "bbox": [int(x1s[i]), int(y1s[i]), int(x2s[i]), int(y2s[i])],
++                    "class_id": cls_id,
++                    "detector": "yolo-onnx",
++                })
++
++            objects.sort(key=lambda o: float(o.get("confidence", 0.0)), reverse=True)
++            return objects
++
++        except Exception as exc:
++            self._load_error = f"YOLO inference failed: {exc}"
++            return []
++    def _detect_with_dnn(self, image, cv2, np) -> list[dict[str, Any]]:
++        if not (self.model_path.exists() and self.config_path.exists()):
++            self._load_error = "object model files are missing; run: python scripts/download_models.py --skip-llm --skip-stt --skip-tts --vision mobilenet-ssd"
++            return []
++        try:
++            if self._net is None:
++                self._net = cv2.dnn.readNetFromCaffe(str(self.config_path), str(self.model_path))
++                self.backend_name = "opencv-dnn"
++            h, w = image.shape[:2]
++            blob = cv2.dnn.blobFromImage(image, 0.007843, (300, 300), (127.5, 127.5, 127.5), False, False)
++            self._net.setInput(blob)
++            detections = self._net.forward()
++        except Exception as exc:
++            self._load_error = str(exc)
++            self._net = None
++            return []
++
++        objects: list[dict[str, Any]] = []
++        try:
++            for i in range(detections.shape[2]):
++                confidence = float(detections[0, 0, i, 2])
++                if confidence < self.confidence_threshold:
++                    continue
++                class_id = int(detections[0, 0, i, 1])
++                label = VOC_CLASSES[class_id] if 0 <= class_id < len(VOC_CLASSES) else f"class_{class_id}"
++                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
++                start_x, start_y, end_x, end_y = box.astype("int")
++                start_x = max(0, min(int(start_x), w - 1))
++                start_y = max(0, min(int(start_y), h - 1))
++                end_x = max(0, min(int(end_x), w - 1))
++                end_y = max(0, min(int(end_y), h - 1))
++                objects.append({
++                    "label": label,
++                    "confidence": round(confidence, 3),
++                    "bbox": [start_x, start_y, end_x, end_y],
++                })
++        except Exception as exc:
++            self._load_error = f"dnn parse failed: {exc}"
++            return []
++
++        objects.sort(key=lambda obj: float(obj.get("confidence", 0.0)), reverse=True)
++        return objects[: self.max_objects]
++
++    def _detect_fallback_faces(self, image, cv2) -> list[dict[str, Any]]:
++        try:
++            if not self._haar_loaded:
++                cascade_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
++                self._face_cascade = cv2.CascadeClassifier(cascade_path)
++                self._haar_loaded = True
++                self.backend_name = "opencv-haar-fallback"
++            if self._face_cascade is None or self._face_cascade.empty():
++                return []
++            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
++            faces = self._face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(45, 45))
++        except Exception:
++            return []
++
++        objects = []
++        for (x, y, w, h) in list(faces)[: self.max_objects]:
++            objects.append({
++                "label": "face/person",
++                "confidence": 0.55,
++                "bbox": [int(x), int(y), int(x + w), int(y + h)],
++            })
++        return objects
+ 
+--- a/voicepi/tts_edge.py
++++ b/voicepi/tts_edge.py
+@@ -0,0 +1,105 @@
++"""Edge TTS -- Microsoft Edge neural voices, free, no API key, requires internet.
++
++Excellent neural quality (AriaNeural, GuyNeural, JennyNeural, SoniaNeural...).
++Latency: ~0.5-1 s on typical home internet.
++
++Install: pip install edge-tts
++No model files needed.
++"""
++from __future__ import annotations
++
++import asyncio
++import subprocess
++import threading
++import time
++
++from .text_utils import clean_for_tts
++
++# Best voices by use case:
++# Female warm:        en-US-AriaNeural
++# Male professional:  en-US-GuyNeural
++# Female friendly:    en-US-JennyNeural
++# Male casual:        en-US-EricNeural
++# British female:     en-GB-SoniaNeural
++# British male:       en-GB-RyanNeural
++# Australian female:  en-AU-NatashaNeural
++
++
++class EdgeTTS:
++    """Text-to-speech using Microsoft Edge TTS (neural quality, free, internet required)."""
++
++    mime_type = "audio/wav"
++
++    def __init__(self, cfg) -> None:
++        self.cfg = cfg
++        self.normalize_text = bool(cfg.get("tts.normalize_text", True))
++        self.voice = str(cfg.get("tts.edge.voice", "en-US-AriaNeural"))
++        self.rate = str(cfg.get("tts.edge.rate", "+0%"))
++        self.volume = str(cfg.get("tts.edge.volume", "+0%"))
++        self.timeout_s = float(cfg.get("tts.synth_timeout_s", 35))
++
++    def synthesize_wav(self, text: str, cancel_event: threading.Event | None = None) -> bytes:
++        try:
++            import edge_tts  # type: ignore  # noqa: F401
++        except ImportError as exc:
++            raise RuntimeError(
++                "edge-tts is not installed. Run: pip install edge-tts"
++            ) from exc
++
++        text = clean_for_tts(text) if self.normalize_text else (text or "").strip()
++        if not text:
++            return b""
++
++        if cancel_event is not None and cancel_event.is_set():
++            raise RuntimeError("TTS cancelled")
++
++        try:
++            mp3_data = asyncio.run(self._synth_mp3(text))
++        except Exception as exc:
++            raise RuntimeError(f"Edge TTS synthesis failed: {exc}") from exc
++
++        if not mp3_data:
++            return b""
++
++        if cancel_event is not None and cancel_event.is_set():
++            raise RuntimeError("TTS cancelled")
++
++        return _mp3_to_wav(mp3_data, timeout=min(self.timeout_s, 20))
++
++    async def _synth_mp3(self, text: str) -> bytes:
++        import edge_tts  # type: ignore
++
++        communicate = edge_tts.Communicate(
++            text,
++            self.voice,
++            rate=self.rate,
++            volume=self.volume,
++        )
++        chunks: list[bytes] = []
++        async for chunk in communicate.stream():
++            if chunk["type"] == "audio":
++                chunks.append(chunk["data"])
++        return b"".join(chunks)
++
++
++def _mp3_to_wav(mp3_data: bytes, timeout: float = 20.0) -> bytes:
++    """Convert MP3 bytes -> WAV bytes using ffmpeg (already installed via apt)."""
++    proc = subprocess.run(
++        [
++            "ffmpeg", "-y",
++            "-f", "mp3",
++            "-i", "pipe:0",
++            "-f", "wav",
++            "-ar", "24000",
++            "-ac", "1",
++            "-acodec", "pcm_s16le",
++            "pipe:1",
++        ],
++        input=mp3_data,
++        capture_output=True,
++        timeout=timeout,
++    )
++    if proc.returncode != 0:
++        stderr = proc.stderr.decode("utf-8", errors="ignore")
++        raise RuntimeError(f"ffmpeg MP3->WAV conversion failed: {stderr}")
++    return proc.stdout

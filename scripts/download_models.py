@@ -83,7 +83,19 @@ VISION_PROFILES = {
         ("https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt", "models/vision/deploy.prototxt"),
         ("https://github.com/chuanqi305/MobileNet-SSD/raw/master/mobilenet_iter_73000.caffemodel", "models/vision/mobilenet_iter_73000.caffemodel"),
     ),
+    "yolo": (
+        # YOLOv11n ONNX -- used by the built-in onnxruntime detector (no PyTorch).
+        ("https://huggingface.co/Ultralytics/assets/resolve/main/yolo11n.onnx?download=true",
+         "models/vision/yolo11n.onnx"),
+    ),
 }
+# Kokoro ONNX models -- high quality offline TTS, no PyTorch.
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+KOKORO_FILES = [
+    ("kokoro-v0_19.onnx", "models/kokoro/kokoro-v0_19.onnx"),  # ~312 MB
+    ("voices-v1_0.bin",   "models/kokoro/voices-v1_0.bin"),    # ~83 MB
+]
+
 
 VOSK_PROFILES = {
     "quality": "vosk-model-en-us-0.22-lgraph",
@@ -227,6 +239,13 @@ def download_vosk(profile: str) -> None:
     print(f"✓ {dst_dir.relative_to(ROOT)}", flush=True)
 
 
+def download_kokoro() -> None:
+    for filename, rel_path in KOKORO_FILES:
+        dst = ROOT / rel_path
+        url = hf_resolve_url(KOKORO_REPO, filename)
+        download_url(url, dst, f"Kokoro ONNX TTS: {filename}")
+
+
 def print_disk_hint() -> None:
     usage = shutil.disk_usage(ROOT)
     print(
@@ -241,11 +260,17 @@ def main() -> None:
     parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--skip-stt", action="store_true")
     parser.add_argument("--skip-tts", action="store_true")
+    parser.add_argument(
+        "--tts-engine",
+        choices=["piper", "kokoro"],
+        default="kokoro",
+        help="Which TTS engine to download models for (default: kokoro). edge-tts needs no models.",
+    )
     parser.add_argument("--skip-vision", action="store_true")
     parser.add_argument("--llm", choices=LLM_PROFILES, default="quality")
     parser.add_argument("--stt", choices=VOSK_PROFILES, default="quality")
     parser.add_argument("--tts", choices=PIPER_PROFILES, default="amy-medium")
-    parser.add_argument("--vision", choices=VISION_PROFILES, default="mobilenet-ssd")
+    parser.add_argument("--vision", choices=VISION_PROFILES, default="yolo")
     parser.add_argument(
         "--small-first",
         action="store_true",
@@ -261,7 +286,10 @@ def main() -> None:
     if not args.skip_stt:
         tasks.append(("stt", lambda: download_vosk(args.stt)))
     if not args.skip_tts:
-        tasks.append(("tts", lambda: download_piper(args.tts)))
+        if args.tts_engine == "kokoro":
+            tasks.append(("tts", download_kokoro))
+        else:
+            tasks.append(("tts", lambda: download_piper(args.tts)))
     if not args.skip_vision:
         tasks.append(("vision", lambda: download_vision(args.vision)))
 

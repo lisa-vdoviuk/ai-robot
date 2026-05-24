@@ -8,6 +8,7 @@ import threading
 import uuid
 from typing import Any
 from voicepi.tts_kokoro import KokoroTTS
+from voicepi.tts_edge import EdgeTTS
 
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock

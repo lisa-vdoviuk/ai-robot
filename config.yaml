@@ -28,8 +28,6 @@ assistant:
 stt:
   engine: "vosk"
   sample_rate: 16000
-  # Quality default: better English model than the tiny 40 MB one, still feasible on Raspberry Pi 5.
-  # For maximum speed, switch to models/vosk/vosk-model-small-en-us-0.15 and run download_models.py --stt small.
   model_path: "models/vosk/vosk-model-en-us-0.22-lgraph"
   min_final_chars: 2
   min_final_words: 1
@@ -54,7 +52,10 @@ llm:
   max_tokens: 70
 
 tts:
-  engine: "kokoro"
+  # "edge"   -- Microsoft Edge neural TTS (best quality, free, internet required, no model files)
+  # "kokoro" -- Kokoro 82M via ONNX Runtime (excellent offline quality, ~400 MB models)
+  # "piper"  -- Piper (fastest, lower quality)
+  engine: "edge"
 
   normalize_text: true
   stream_during_generation: false
@@ -68,15 +69,30 @@ tts:
   join_timeout_s: 45
   playback_gap_ms: 120
 
-  kokoro:
-    lang_code: "a"
-    voice: "af_heart"
-    sample_rate: 24000
+  # --- Edge TTS config (engine: "edge") ---
+  # Best quality voices: en-US-AriaNeural, en-US-JennyNeural, en-US-GuyNeural,
+  #   en-GB-SoniaNeural, en-GB-RyanNeural, en-AU-NatashaNeural
+  edge:
+    voice: "en-US-AriaNeural"
+    rate: "+0%"       # e.g. "+10%" to speak faster
+    volume: "+0%"
 
-  # fallback, якщо повернешся до piper
+  # --- Kokoro ONNX config (engine: "kokoro") ---
+  # Voices: af_heart (default), af_bella, af_nicole, am_adam, am_michael,
+  #   bf_emma, bf_isabella, bm_george, bm_lewis
+  # Download models first: python scripts/download_models.py --tts-engine kokoro
+  kokoro:
+    voice: "af_heart"
+    speed: 1.0
+    lang: "en-us"   # "en-us" or "en-gb"
+    sample_rate: 24000
+    model_path: "models/kokoro/kokoro-v0_19.onnx"
+    voices_path: "models/kokoro/voices-v1_0.bin"
+
+  # --- Piper config (engine: "piper") ---
   piper_bin: "piper"
-  model_path: "models/piper/en_US-lessac-medium.onnx"
-  config_path: "models/piper/en_US-lessac-medium.onnx.json"
+  model_path: "models/piper/en_US-amy-medium.onnx"
+  config_path: "models/piper/en_US-amy-medium.onnx.json"
   speaker_id: null
   length_scale: 1.12
   noise_scale: 0.45
@@ -111,6 +127,8 @@ camera:
   enabled: true
   width: 320
   height: 240
+  # For USB camera fallback: device index (0 = /dev/video0, 1 = /dev/video1, ...)
+  cv2_device_index: 0
 
 vision:
   enabled: true
@@ -131,19 +149,26 @@ vision:
 
   object_detection:
     enabled: true
+    # "yolo"   -- YOLOv11n via ONNX Runtime (no PyTorch). Best accuracy on COCO 80 classes.
+    #            Download: python scripts/download_models.py --vision yolo
+    # "mobilenet" -- OpenCV DNN MobileNet SSD. Lighter, 20 VOC classes.
+    #            Download: python scripts/download_models.py --vision mobilenet-ssd
     backend: "yolo"
 
+    # YOLOv11n ONNX model path (backend: yolo).
+    # The app also checks <project_root>/yolo11n.onnx as fallback automatically.
     model_path: "models/vision/yolo11n.onnx"
-    labels_path: "models/vision/coco.names"
 
-    imgsz: 416
+    # MobileNet SSD paths (backend: mobilenet -- legacy)
+    config_path: "models/vision/deploy.prototxt"
+
+    imgsz: 416          # inference size in pixels (416 is fast on Pi; use 640 for accuracy)
     confidence_threshold: 0.35
     nms_threshold: 0.45
     max_objects: 8
 
 client:
   vad_threshold: 0.018
-  # Higher threshold while the assistant is speaking to avoid cancelling itself from speaker echo.
   barge_in_threshold: 0.045
   vad_hold_ms: 650
   min_speech_ms: 180
@@ -151,14 +176,11 @@ client:
   audio_chunk_ms: 80
 
 robot:
-  # Set true when the ESP32 firmware in esp32/voicepi_motor_controller.ino is running.
   enabled: false
-  # Use the IP printed in the ESP32 Serial Monitor after it connects to Wi-Fi.
   base_url: "http://192.168.1.50"
   token: "change-me-robot-token"
   timeout_s: 2.0
 
-  # Safety clamps. The LLM may request a movement, but these hard limits win.
   min_confidence: 0.55
   min_speed: 0.20
   max_speed: 0.75
@@ -167,20 +189,14 @@ robot:
   max_duration_ms: 1800
   default_duration_ms: 700
   planner_max_tokens: 80
-  # Speeds up normal chat: only run the LLM robot planner when the transcript looks robot-control-related.
-  # This gate never executes commands by itself; it only decides whether to ask the planner.
   fast_intent_gate: true
 
-  # Emergency behavior.
   stop_on_barge_in: true
   stop_on_disconnect: true
 
 system:
-  # Raspberry Pi health telemetry shown on the dashboard (CPU temp, CPU load, RAM).
   enabled: true
-  # How often the background sampler refreshes (seconds). The dashboard polls /system/stats.
   interval_s: 2.0
-  # Thresholds for highlighting. The Pi 5 starts soft-throttling around 80-85 C.
   temp_warn_c: 70.0
   temp_critical_c: 80.0
   cpu_warn_pct: 80.0

@@ -1,15 +1,36 @@
+# Core web server
 Flask>=3.0.0
 Flask-Sock>=0.7.0
 simple-websocket>=1.0.0
+
+# Config / utils
 PyYAML>=6.0.1
-vosk>=0.3.45
-piper-tts>=1.4.2
-llama-cpp-python>=0.3.8
-huggingface_hub>=0.23.0
 requests>=2.31.0
-pyOpenSSL>=24.0.0
 tqdm>=4.66.0
 numpy
-opencv-python
+
+# SSL (self-signed cert for browser mic access)
+pyOpenSSL>=24.0.0
+
+# STT
+vosk>=0.3.45
+
+# LLM (only needed for local llama_cpp engine; groq/openai engines skip this)
+# llama-cpp-python>=0.3.8    # install separately via install_pi.sh (needs CMake flags)
+huggingface_hub>=0.23.0
+
+# TTS -- choose ONE engine in config.yaml: tts.engine = "kokoro" | "edge" | "piper"
+# kokoro-onnx: high quality, offline, ONNX Runtime (no PyTorch), works on ARM
+kokoro-onnx>=0.4.0
+# edge-tts: neural quality (best), free, internet required, no model files
+edge-tts>=6.1.9
+# piper-tts: kept for legacy; kokoro-onnx or edge-tts preferred
+piper-tts>=1.4.2
+
+# Audio encoding/IO
 soundfile>=0.12.1
-kokoro>=0.9.4,<0.10
+
+# Vision / Camera
+# opencv-python is installed via apt (python3-opencv) to get ARM-optimized build.
+# onnxruntime for YOLO object detection (no PyTorch needed).
+onnxruntime>=1.17.0

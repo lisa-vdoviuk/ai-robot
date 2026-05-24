@@ -60,6 +60,9 @@ class Config:
         tts_engine = str(self.get("tts.engine", "piper")).strip().lower()
         if tts_engine in {"piper", "local"}:
             required_paths.append("tts.model_path")
+        elif tts_engine == "kokoro":
+            required_paths.append("tts.kokoro.model_path")
+            required_paths.append("tts.kokoro.voices_path")
 
         for dotted in required_paths:
             p = self.path(dotted)
@@ -72,5 +75,6 @@ class Config:
                 p = self.path("tts.config_path")
                 if not p.exists():
                     missing.append(f"tts.config_path: {p}")
+        # edge-tts: no model files needed
 
         return missing
