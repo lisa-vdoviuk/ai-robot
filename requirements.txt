@@ -10,5 +10,5 @@ requests>=2.31.0
 pyOpenSSL>=24.0.0
 tqdm>=4.66.0
 ultralytics>=8.3.0
-kokoro>=0.9.2
+kokoro>=0.9.4,<0.10
 soundfile>=0.12.1
