@@ -194,7 +194,31 @@ def create_app(cfg: Config) -> Flask:
 
     @app.get("/camera/status")
     def camera_status():
-        return jsonify({"camera": camera_manager.status().to_dict(), "vision": vision_service.status()})
+        try:
+            camera_status_data = camera_manager.status().to_dict()
+        except Exception as exc:
+            logger.event("camera", "error", f"camera status failed: {exc}")
+            camera_status_data = {
+                "enabled": False,
+                "running": False,
+                "error": str(exc),
+            }
+
+        try:
+            vision_status_data = vision_service.status()
+        except Exception as exc:
+            logger.event("vision", "error", f"vision status failed: {exc}")
+            vision_status_data = {
+                "enabled": False,
+                "backend": "error",
+                "error": str(exc),
+                "latest": None,
+            }
+
+        return jsonify({
+            "camera": camera_status_data,
+            "vision": vision_status_data,
+        })
 
     @app.get("/system/stats")
     def system_stats():
@@ -234,7 +258,15 @@ def create_app(cfg: Config) -> Flask:
             sessions[sid] = sess
             sess.log("session", "info", "client connected")
             sess.emit("server_ready", {"sid": sid, "assistant_name": cfg.get("assistant.name", "VoicePi")})
-            sess.emit("camera_status", {"camera": camera_manager.status().to_dict(), "vision": vision_service.status()})
+            try:
+                _cam_status = camera_manager.status().to_dict()
+            except Exception:
+                _cam_status = {"enabled": False, "running": False, "error": "status unavailable"}
+            try:
+                _vis_status = vision_service.status()
+            except Exception:
+                _vis_status = {"enabled": False, "backend": "error", "latest": None}
+            sess.emit("camera_status", {"camera": _cam_status, "vision": _vis_status})
             latest_vision = vision_service.latest()
             if latest_vision:
                 sess.emit("vision_update", latest_vision.to_dict())

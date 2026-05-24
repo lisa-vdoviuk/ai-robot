@@ -51,34 +51,7 @@ llm:
 
   temperature: 0.25
   top_p: 0.85
-  max_tokens: 60
-
-  stop:
-    - "<|im_end|>"
-
-# llm:
-#   engine: "llama_cpp"
-#   model_path: "models/llm/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-#   chat_format: "chatml"
-
-#   n_ctx: 768
-#   n_threads: 2
-#   n_batch: 64                                                      => offline mode
-#   n_gpu_layers: 0
-
-#   temperature: 0.25
-#   top_p: 0.85
-#   repeat_penalty: 1.05
-#   max_tokens: 55
-
-#   stop:
-#     - "<|im_end|>"
-
-# Optional automatic clarification for very suspicious STT output.
-quality_guard:
-  enabled: true
-  min_words_for_direct_answer: 2
-  ask_clarification_for_single_word: true
+  max_tokens: 70
 
 tts:
   engine: "kokoro"
@@ -100,7 +73,7 @@ tts:
     voice: "af_heart"
     sample_rate: 24000
 
-  # fallback на випадок, якщо повертаємось до Piper
+  # fallback, якщо повернешся до piper
   piper_bin: "piper"
   model_path: "models/piper/en_US-lessac-medium.onnx"
   config_path: "models/piper/en_US-lessac-medium.onnx.json"
@@ -141,8 +114,6 @@ camera:
 
 vision:
   enabled: true
-
-  # YOLO не ганяємо постійно у фоні на високій частоті.
   poll_enabled: false
   poll_interval_s: 8.0
 
@@ -160,15 +131,14 @@ vision:
 
   object_detection:
     enabled: true
+    backend: "opencv_yolo_onnx"
 
-    # Варіанти: "yolo", "mobilenet"
-    backend: "yolo"
-
-    # Ultralytics може завантажити yolo11n.pt автоматично при першому запуску.
-    model_path: "yolo11n.pt"
+    model_path: "models/vision/yolo11n.onnx"
+    labels_path: "models/vision/coco.names"
 
     imgsz: 416
     confidence_threshold: 0.35
+    nms_threshold: 0.45
     max_objects: 8
 
 client:

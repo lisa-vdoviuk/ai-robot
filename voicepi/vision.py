@@ -207,14 +207,31 @@ class VisionService:
         return ""
 
     def status(self) -> dict[str, Any]:
+        latest = self.latest()
+
+        analyzer_backend = "unavailable"
+        detector_status: dict[str, Any] = {}
+
+        try:
+            analyzer_backend = getattr(self.analyzer, "backend_name", "unknown")
+        except Exception as exc:
+            analyzer_backend = f"error: {exc}"
+
+        try:
+            detector_status = self.analyzer.object_detector.status()
+        except Exception as exc:
+            detector_status = {
+                "enabled": False,
+                "backend": "error",
+                "error": str(exc),
+            }
+
         return {
             "enabled": self.enabled,
-            "backend": self.backend_name,
-            "mode": self.backend,
-            "model_path": str(self.model_path),
-            "config_path": str(self.config_path),
-            "model_ready": self.backend == "yolo" or self.model_path.exists(),
-            "error": self._load_error,
+            "poll_enabled": bool(getattr(self, "poll_enabled", True)),
+            "backend": analyzer_backend,
+            "object_detector": detector_status,
+            "latest": latest.to_dict() if latest else None,
         }
 
     def _loop(self) -> None:

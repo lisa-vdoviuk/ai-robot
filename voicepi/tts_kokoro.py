@@ -10,12 +10,6 @@ from .text_utils import clean_for_tts
 
 
 class KokoroTTS:
-    """Free local TTS engine based on Kokoro.
-
-    It exposes the same synthesize_wav() method as PiperTTS, so the rest of
-    the project does not need to know which TTS backend is active.
-    """
-
     mime_type = "audio/wav"
 
     def __init__(self, cfg) -> None:
@@ -52,7 +46,6 @@ class KokoroTTS:
 
         with self._lock:
             pipeline = self._load_pipeline()
-
             generator = pipeline(text, voice=self.voice)
 
             for _graphemes, _phonemes, audio in generator:
@@ -67,13 +60,9 @@ class KokoroTTS:
         if not audio_parts:
             return b""
 
-        # Kokoro returns numpy arrays. Concatenate safely.
-        try:
-            import numpy as np
+        import numpy as np
 
-            audio_all = np.concatenate(audio_parts)
-        except Exception:
-            audio_all = audio_parts[0]
+        audio_all = np.concatenate(audio_parts)
 
         out = io.BytesIO()
         sf.write(out, audio_all, self.sample_rate, format="WAV")
