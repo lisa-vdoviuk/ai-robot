@@ -81,17 +81,11 @@ quality_guard:
   ask_clarification_for_single_word: true
 
 tts:
-  # Варіанти:
-  # kokoro - якісніший безкоштовний локальний TTS
-  # piper  - швидший і стабільніший fallback
   engine: "kokoro"
 
   normalize_text: true
-
-  # Groq вже швидкий, тому краще не стрімити TTS під час генерації.
   stream_during_generation: false
 
-  # Для Kokoro краще озвучувати відповідь цілком або великими шматками.
   sentence_min_chars: 60
   sentence_max_chars: 260
   chunk_max_chars: 320
@@ -102,17 +96,11 @@ tts:
   playback_gap_ms: 120
 
   kokoro:
-    # a = American English
-    # b = British English
     lang_code: "a"
-
-    # Хороший стартовий voice.
-    # Якщо не сподобається, потім спробуємо af_bella / af_nicole / am_adam.
     voice: "af_heart"
-
     sample_rate: 24000
 
-  # Piper fallback
+  # fallback на випадок, якщо повертаємось до Piper
   piper_bin: "piper"
   model_path: "models/piper/en_US-lessac-medium.onnx"
   config_path: "models/piper/en_US-lessac-medium.onnx.json"
@@ -121,16 +109,6 @@ tts:
   noise_scale: 0.45
   noise_w: 0.55
   sentence_silence: 0.28
-
-  openai:
-    base_url: "https://api.openai.com/v1"
-    api_key_env: "OPENAI_API_KEY"
-    model: "gpt-4o-mini-tts"
-    voice: "nova"
-    response_format: "mp3"
-    speed: 1.0
-    instructions: "Speak naturally, warmly, and clearly. Use short pauses between sentences."
-    timeout_s: 25
 
 memory:
   enabled: true
