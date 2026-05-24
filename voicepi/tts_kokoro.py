@@ -1,4 +1,4 @@
-"""Kokoro TTS via kokoro-onnx (ONNX Runtime) -- no PyTorch required.
+"""Kokoro TTS via kokoro-onnx (ONNX Runtime) - no PyTorch required.
 
 Install model files once:
   python scripts/download_models.py --tts-engine kokoro
@@ -9,6 +9,7 @@ Voices: af_heart (default), af_bella, af_nicole, am_adam, am_michael,
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import time
 
@@ -16,9 +17,18 @@ import soundfile as sf
 
 from .text_utils import clean_for_tts
 
+log = logging.getLogger(__name__)
+
 
 class KokoroTTS:
-    """Kokoro 82M via ONNX Runtime -- ARM-friendly, no PyTorch needed."""
+    """Kokoro 82M via ONNX Runtime - ARM-friendly, no PyTorch needed.
+
+    Speed tips (all tunable in config.yaml):
+      - tts.stream_during_generation: true   <- biggest win: play first sentence ASAP
+      - tts.sentence_min_chars: 25           <- shorter first chunk = faster first audio
+      - tts.kokoro.warmup: true              <- synthesize dummy text at startup so
+                                                first real call skips ONNX JIT overhead
+    """
 
     mime_type = "audio/wav"
 
@@ -36,19 +46,17 @@ class KokoroTTS:
 
         self._kokoro = None
         self._lock = threading.Lock()
+        self._ready = threading.Event()
 
-    def _load(self):
-        if self._kokoro is not None:
-            return self._kokoro
-        try:
-            from kokoro_onnx import Kokoro  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(
-                "kokoro-onnx is not installed. Run: pip install kokoro-onnx\n"
-                "Then download models: python scripts/download_models.py --tts-engine kokoro"
-            ) from exc
-        self._kokoro = Kokoro(self._model_path, self._voices_path)
-        return self._kokoro
+        # Pre-warm in background so first user request doesn't pay cold-start cost.
+        # Synthesizing a short phrase forces ONNX to load and JIT-compile the graph.
+        if bool(cfg.get("tts.kokoro.warmup", True)):
+            t = threading.Thread(target=self._warmup, name="voicepi-kokoro-warmup", daemon=True)
+            t.start()
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
 
     def synthesize_wav(self, text: str, cancel_event: threading.Event | None = None) -> bytes:
         text = clean_for_tts(text) if self.normalize_text else (text or "").strip()
@@ -76,3 +84,35 @@ class KokoroTTS:
         out = io.BytesIO()
         sf.write(out, samples, sample_rate, format="WAV")
         return out.getvalue()
+
+    # ------------------------------------------------------------------
+    # Private
+    # ------------------------------------------------------------------
+
+    def _load(self):
+        """Load Kokoro (call inside self._lock)."""
+        if self._kokoro is not None:
+            return self._kokoro
+        try:
+            from kokoro_onnx import Kokoro  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "kokoro-onnx is not installed. Run: pip install kokoro-onnx\n"
+                "Then: python scripts/download_models.py --tts-engine kokoro"
+            ) from exc
+        self._kokoro = Kokoro(self._model_path, self._voices_path)
+        return self._kokoro
+
+    def _warmup(self) -> None:
+        """Background pre-warm: load model + run one inference so ONNX JIT is done
+        before the first real user request arrives."""
+        try:
+            with self._lock:
+                kokoro = self._load()
+            # A very short phrase is enough to trigger full graph compilation.
+            kokoro.create("Hi.", voice=self.voice, speed=self.speed, lang=self.lang)
+            log.info("kokoro warmup done")
+        except Exception as exc:
+            log.warning("kokoro warmup failed (non-fatal): %s", exc)
+        finally:
+            self._ready.set()

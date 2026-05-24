@@ -58,12 +58,12 @@ tts:
   engine: "edge"
 
   normalize_text: true
-  stream_during_generation: false
+  stream_during_generation: true   # start playback of first sentence while rest is synthesizing
 
-  sentence_min_chars: 60
-  sentence_max_chars: 260
-  chunk_max_chars: 320
-  coalesce_wait_s: 0.05
+  sentence_min_chars: 25    # shorter first chunk = faster first audio
+  sentence_max_chars: 200   # keeps chunks manageable on Pi CPU
+  chunk_max_chars: 280
+  coalesce_wait_s: 0.03
 
   synth_timeout_s: 35
   join_timeout_s: 45
@@ -86,6 +86,7 @@ tts:
     speed: 1.0
     lang: "en-us"   # "en-us" or "en-gb"
     sample_rate: 24000
+    warmup: true      # synthesize dummy phrase at boot to avoid cold-start delay
     model_path: "models/kokoro/kokoro-v1.0.int8.onnx"
     voices_path: "models/kokoro/voices-v1.0.bin"
 
