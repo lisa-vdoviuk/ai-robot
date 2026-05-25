@@ -269,7 +269,8 @@ class ConversationSession:
     def _run_turn(self, turn_id: str, user_text: str, cancel_event: threading.Event) -> None:
         started = time.perf_counter()
         self.emit("turn_start", {"turn_id": turn_id, "user_text": user_text})
-        self.history.append({"role": "user", "content": user_text})
+        with self.lock:
+            self.history.append({"role": "user", "content": user_text})
 
         vision_context = self._capture_vision_context(user_text)
         planner_text = user_text
@@ -402,7 +403,8 @@ class ConversationSession:
             self.emit("turn_cancelled", {"turn_id": turn_id})
             return
 
-        self.history.append({"role": "assistant", "content": answer})
+        with self.lock:
+            self.history.append({"role": "assistant", "content": answer})
         self._remember_turn(user_text, answer)
         self.emit(
             "xai_update",
@@ -482,7 +484,7 @@ class ConversationSession:
                     n = self.memory_store.remember_facts(facts, source="conversation", user_id=self.user_id)
                     self.log("memory", "info", "stored durable facts", count=n, facts=facts)
             keep = int(self.cfg.get("memory.max_episodes", 2000))
-            if keep > 0:
+            if keep > 0 and len(self.history) % 40 == 0:
                 self.memory_store.prune_episodes(keep=keep, user_id=self.user_id)
         except Exception as exc:
             self.log("memory", "error", f"remember turn failed: {exc}")

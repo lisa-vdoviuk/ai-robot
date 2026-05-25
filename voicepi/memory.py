@@ -162,6 +162,8 @@ class MemoryStore:
 
     def _init_db(self) -> bool:
         with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
             cur = self._conn.cursor()
             cur.execute(
                 """
@@ -227,6 +229,16 @@ class MemoryStore:
                     CREATE TRIGGER IF NOT EXISTS episodes_ad AFTER DELETE ON episodes BEGIN
                         INSERT INTO episodes_fts(episodes_fts, rowid, user_text, assistant_text)
                         VALUES ('delete', old.id, old.user_text, old.assistant_text);
+                    END
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS episodes_au AFTER UPDATE ON episodes BEGIN
+                        INSERT INTO episodes_fts(episodes_fts, rowid, user_text, assistant_text)
+                        VALUES ('delete', old.id, old.user_text, old.assistant_text);
+                        INSERT INTO episodes_fts(rowid, user_text, assistant_text)
+                        VALUES (new.id, new.user_text, new.assistant_text);
                     END
                     """
                 )
@@ -434,7 +446,7 @@ class MemoryStore:
                     for r in rows:
                         d = dict(r)
                         # bm25 returns lower=better; map to a 0..1-ish keyword score.
-                        d["_kw_score"] = 1.0 / (1.0 + max(0.0, float(d.pop("rank", 0.0))))
+                        d["_kw_score"] = 1.0 / (1.0 + abs(float(d.pop("rank", 0.0))))
                         result.append(d)
                     if result:
                         return result

@@ -162,11 +162,14 @@ class VisionService:
             self._publish(obs)
             return obs
 
-        if not self._analyze_lock.acquire(timeout=0.05):
+        if not self._analyze_lock.acquire(timeout=2.0):
             existing = self.latest()
             if existing:
                 return existing
-            self._analyze_lock.acquire()
+            return self._observation(
+                False, "busy", "vision analysis timed out waiting for lock",
+                reason=reason
+            )
         try:
             try:
                 obs = self.analyzer.analyze(frame, reason=reason)

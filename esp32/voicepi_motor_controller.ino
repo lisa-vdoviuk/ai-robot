@@ -47,39 +47,39 @@ void sendJson(int status, const String& body) {
 }
 
 void stopMotors() {
-  analogWrite(LEFT_PWM, 0);
-  analogWrite(RIGHT_PWM, 0);
-  digitalWrite(LEFT_IN1, LOW);
-  digitalWrite(LEFT_IN2, LOW);
+  ledcWrite(0, 0);
+  ledcWrite(1, 0);
+  digitalWrite(LEFT_IN1,  LOW);
+  digitalWrite(LEFT_IN2,  LOW);
   digitalWrite(RIGHT_IN1, LOW);
   digitalWrite(RIGHT_IN2, LOW);
-  stopAtMs = 0;
+  stopAtMs   = 0;
   lastCommand = "stop";
-  lastSpeed = 0.0;
+  lastSpeed   = 0.0;
 }
 
-void setSide(int in1, int in2, int pwmPin, int signedPwm, bool invert) {
+void setSide(int in1, int in2, int ledcChannel, int signedPwm, bool invert) {
   if (invert) signedPwm = -signedPwm;
   signedPwm = constrain(signedPwm, -PWM_MAX, PWM_MAX);
 
   if (signedPwm > 0) {
     digitalWrite(in1, HIGH);
     digitalWrite(in2, LOW);
-    analogWrite(pwmPin, signedPwm);
+    ledcWrite(ledcChannel, signedPwm);
   } else if (signedPwm < 0) {
     digitalWrite(in1, LOW);
     digitalWrite(in2, HIGH);
-    analogWrite(pwmPin, -signedPwm);
+    ledcWrite(ledcChannel, -signedPwm);
   } else {
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
-    analogWrite(pwmPin, 0);
+    ledcWrite(ledcChannel, 0);
   }
 }
 
 void drive(int leftPwm, int rightPwm) {
-  setSide(LEFT_IN1, LEFT_IN2, LEFT_PWM, leftPwm, INVERT_LEFT);
-  setSide(RIGHT_IN1, RIGHT_IN2, RIGHT_PWM, rightPwm, INVERT_RIGHT);
+  setSide(LEFT_IN1, LEFT_IN2,  0, leftPwm,  INVERT_LEFT);
+  setSide(RIGHT_IN1, RIGHT_IN2, 1, rightPwm, INVERT_RIGHT);
 }
 
 void requireAuthOrFail() {
@@ -164,12 +164,16 @@ void handleMove() {
 }
 
 void setupPins() {
-  pinMode(LEFT_IN1, OUTPUT);
-  pinMode(LEFT_IN2, OUTPUT);
-  pinMode(LEFT_PWM, OUTPUT);
+  // Configure LEDC channels for PWM
+  ledcAttachPin(LEFT_PWM,  0);  // channel 0
+  ledcAttachPin(RIGHT_PWM, 1);  // channel 1
+  ledcSetup(0, 5000, 8);        // 5kHz, 8-bit resolution
+  ledcSetup(1, 5000, 8);
+
+  pinMode(LEFT_IN1,  OUTPUT);
+  pinMode(LEFT_IN2,  OUTPUT);
   pinMode(RIGHT_IN1, OUTPUT);
   pinMode(RIGHT_IN2, OUTPUT);
-  pinMode(RIGHT_PWM, OUTPUT);
   stopMotors();
 }
 
