@@ -566,13 +566,12 @@ class ObjectDetector:
             return []
 
         if self.backend == "yolo":
-            yolo_objects = self._detect_with_yolo(image)
-            if yolo_objects:
-                return yolo_objects
+            return self._detect_with_yolo(image)
 
-        dnn_objects = self._detect_with_dnn(image, cv2, np)
-        if dnn_objects:
-            return dnn_objects
+        if self.backend == "mobilenet":
+            dnn_objects = self._detect_with_dnn(image, cv2, np)
+            if dnn_objects:
+                return dnn_objects
 
         return self._detect_fallback_faces(image, cv2)
     # COCO-80 class names (used by YOLOv11n trained on COCO dataset)

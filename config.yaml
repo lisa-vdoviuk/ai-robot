@@ -55,7 +55,7 @@ tts:
   # "edge"   -- Microsoft Edge neural TTS (best quality, free, internet required, no model files)
   # "kokoro" -- Kokoro 82M via ONNX Runtime (excellent offline quality, ~400 MB models)
   # "piper"  -- Piper (fastest, lower quality)
-  engine: "edge"
+  engine: "kokoro"
 
   normalize_text: true
   stream_during_generation: true   # start playback of first sentence while rest is synthesizing
@@ -126,8 +126,8 @@ memory:
 
 camera:
   enabled: true
-  width: 320
-  height: 240
+  width: 640
+  height: 480
   # For USB camera fallback: device index (0 = /dev/video0, 1 = /dev/video1, ...)
   cv2_device_index: 0
 
@@ -163,8 +163,8 @@ vision:
     # MobileNet SSD paths (backend: mobilenet -- legacy)
     config_path: "models/vision/deploy.prototxt"
 
-    imgsz: 416          # inference size in pixels (416 is fast on Pi; use 640 for accuracy)
-    confidence_threshold: 0.35
+    imgsz: 640        # inference size in pixels (416 is fast on Pi; use 640 for accuracy)
+    confidence_threshold: 0.30
     nms_threshold: 0.45
     max_objects: 8
 
