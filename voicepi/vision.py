@@ -551,10 +551,40 @@ class ObjectDetector:
         self._yolo_input_name: str | None = None
         self._yolo_model_file: str | None = None
 
+    def _yolo_candidates(self) -> list[Path]:
+        return [
+            self.model_path,
+            self.model_path.parent / "yolo11n.onnx",
+            self.model_path.parent.parent / "yolo11n.onnx",
+            self.model_path.parent.parent.parent / "yolo11n.onnx",
+        ]
+
+
+    def _find_yolo_model(self) -> Path | None:
+        for candidate in self._yolo_candidates():
+            if candidate.exists():
+                return candidate
+        return None
+
+
     def status(self) -> dict[str, Any]:
+        if self.backend == "yolo":
+            model_file = self._find_yolo_model()
+            return {
+                "enabled": self.enabled,
+                "backend": self.backend_name,
+                "configured_backend": self.backend,
+                "model_path": str(self.model_path),
+                "resolved_model_path": str(model_file) if model_file else None,
+                "config_path": None,
+                "model_ready": model_file is not None,
+                "error": self._load_error,
+            }
+
         return {
             "enabled": self.enabled,
             "backend": self.backend_name,
+            "configured_backend": self.backend,
             "model_path": str(self.model_path),
             "config_path": str(self.config_path),
             "model_ready": self.model_path.exists() and self.config_path.exists(),
@@ -598,22 +628,14 @@ class ObjectDetector:
                 import onnxruntime as ort  # type: ignore
 
                 # Look for the model in several candidate locations.
-                candidates = [
-                    self.model_path,
-                    self.model_path.parent / "yolo11n.onnx",
-                    self.model_path.parent.parent / "yolo11n.onnx",
-                ]
-                model_file = None
-                for c in candidates:
-                    if c.exists():
-                        model_file = c
-                        break
+                model_file = self._find_yolo_model()
 
                 if model_file is None:
                     self._load_error = (
-                        f"YOLO model not found -- checked: {[str(c) for c in candidates]}. "
+                        f"YOLO model not found -- checked: {[str(c) for c in self._yolo_candidates()]}. "
                         "Run: python scripts/download_models.py --vision yolo"
                     )
+                    self.backend_name = "yolo-missing"
                     return []
 
                 opts = ort.SessionOptions()
@@ -624,6 +646,7 @@ class ObjectDetector:
                 self._yolo_input_name = self._yolo.get_inputs()[0].name
                 self._yolo_model_file = str(model_file)
                 self.backend_name = "onnxruntime-yolo"
+                self._load_error = None
 
         except Exception as exc:
             self._load_error = f"YOLO ONNX load failed: {exc}"
