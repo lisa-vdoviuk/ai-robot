@@ -1,7 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local config / secrets
+.env
+*.env
+config.local.yaml
+
+# Runtime data
+logs/*
+!logs/.gitkeep
+*.sqlite
+*.sqlite-*
+
+# Downloaded/generated models and partial downloads
+models/
+*.onnx
+*.pt
+*.gguf
+*.caffemodel
+*.part
+
+# Build/tooling
 node_modules/
 dist/
 build/
 .cache/
-.venv/
-models/
 yolo-export-venv/
+
+# Generated patch files
+*.patch

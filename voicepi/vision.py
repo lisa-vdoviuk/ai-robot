@@ -9,15 +9,9 @@ from typing import Any, Callable
 from .camera import CameraManager
 
 
-VOC_CLASSES = [
-    "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
-    "cat", "chair", "cow", "dining table", "dog", "horse", "motorbike", "person",
-    "potted plant", "sheep", "sofa", "train", "tv monitor",
-]
-
 OBSTACLE_LABELS = {
-    "person", "chair", "dining table", "sofa", "bottle", "cat", "dog", "car", "bus",
-    "bicycle", "motorbike", "potted plant", "tv monitor",
+    "person", "chair", "dining table", "couch", "bottle", "cat", "dog", "car", "bus",
+    "bicycle", "motorcycle", "potted plant", "tv", "laptop", "backpack",
 }
 
 
@@ -506,11 +500,12 @@ class BasicVisionAnalyzer:
                 visible.append(f"{label} in {zone}{conf_text}")
             parts.append("Objects: " + ", ".join(visible) + ".")
         else:
-            detector_ready = self.object_detector.status().get("model_ready")
-            if detector_ready:
-                parts.append("No known objects detected in the current frame.")
+            detector_status = self.object_detector.status()
+            if detector_status.get("model_ready"):
+                parts.append("No COCO objects detected in the current frame.")
             else:
-                parts.append("Camera frame available; object model files are missing, so only motion/face fallback may work.")
+                error = detector_status.get("error") or "YOLO model is not ready"
+                parts.append(f"Camera frame available, but object detection is not ready: {error}.")
 
         if motion.get("detected"):
             parts.append(f"Motion detected in the {motion.get('zone', 'unknown')} zone.")
@@ -533,25 +528,51 @@ class BasicVisionAnalyzer:
 
 
 class ObjectDetector:
+    """Small YOLO11 ONNX detector for Raspberry Pi CPU inference.
+
+    The app uses the Ultralytics YOLO11n detection export. Its common ONNX
+    output is [1, 84, 8400], but local exports may be [1, 8400, 84] or an
+    NMS-enabled [N, 6]. The decoder accepts these layouts so object recognition
+    does not silently fail when the model/export changes.
+    """
+
+    _COCO_NAMES = [
+        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+        "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+        "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+        "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+        "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+        "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+        "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+        "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+        "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+        "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+        "toothbrush",
+    ]
+
     def __init__(self, cfg) -> None:
         self.cfg = cfg
         self.enabled = bool(cfg.get("vision.object_detection.enabled", True))
-        self.model_path = Path(str(cfg.path("vision.object_detection.model_path", "models/vision/mobilenet_iter_73000.caffemodel")))
-        self.config_path = Path(str(cfg.path("vision.object_detection.config_path", "models/vision/deploy.prototxt")))
-        self.confidence_threshold = float(cfg.get("vision.object_detection.confidence_threshold", 0.45))
-        self.max_objects = int(cfg.get("vision.object_detection.max_objects", 6))
-        self.backend_name = "disabled" if not self.enabled else "opencv-dnn"
-        self._net = None
+        self.backend = str(cfg.get("vision.object_detection.backend", "yolo")).strip().lower()
+        self.model_path = Path(str(cfg.path("vision.object_detection.model_path", "models/vision/yolo11n.onnx")))
+        self.confidence_threshold = float(cfg.get("vision.object_detection.confidence_threshold", 0.20))
+        self.nms_threshold = float(cfg.get("vision.object_detection.nms_threshold", 0.45))
+        self.max_objects = int(cfg.get("vision.object_detection.max_objects", 10))
+        self.yolo_imgsz = int(cfg.get("vision.object_detection.imgsz", 640))
+        self.threads = max(1, int(cfg.get("vision.object_detection.threads", 2)))
+        self.debug = bool(cfg.get("vision.object_detection.debug", False))
+
+        self.backend_name = "disabled" if not self.enabled else "yolo-not-loaded"
         self._load_error: str | None = None
-        self._haar_loaded = False
-        self._face_cascade = None
-        self.backend = str(cfg.get("vision.object_detection.backend", "mobilenet")).strip().lower()
-        self.yolo_imgsz = int(cfg.get("vision.object_detection.imgsz", 416))
         self._yolo = None
         self._yolo_input_name: str | None = None
+        self._yolo_input_shape: list[Any] | None = None
         self._yolo_model_file: str | None = None
+        self._last_stats: dict[str, Any] = {}
 
     def _yolo_candidates(self) -> list[Path]:
+        # Keep project-root fallbacks because older zips placed yolo11n.onnx next
+        # to app.py; the clean repository uses models/vision/yolo11n.onnx.
         return [
             self.model_path,
             self.model_path.parent / "yolo11n.onnx",
@@ -559,245 +580,253 @@ class ObjectDetector:
             self.model_path.parent.parent.parent / "yolo11n.onnx",
         ]
 
-
     def _find_yolo_model(self) -> Path | None:
         for candidate in self._yolo_candidates():
             if candidate.exists():
                 return candidate
         return None
 
-
     def status(self) -> dict[str, Any]:
-        if self.backend == "yolo":
-            model_file = self._find_yolo_model()
-            return {
-                "enabled": self.enabled,
-                "backend": self.backend_name,
-                "configured_backend": self.backend,
-                "model_path": str(self.model_path),
-                "resolved_model_path": str(model_file) if model_file else None,
-                "config_path": None,
-                "model_ready": model_file is not None,
-                "error": self._load_error,
-            }
-
+        model_file = self._find_yolo_model() if self.backend == "yolo" else None
         return {
             "enabled": self.enabled,
             "backend": self.backend_name,
             "configured_backend": self.backend,
             "model_path": str(self.model_path),
-            "config_path": str(self.config_path),
-            "model_ready": self.model_path.exists() and self.config_path.exists(),
+            "resolved_model_path": str(model_file) if model_file else None,
+            "model_ready": bool(model_file) if self.backend == "yolo" else False,
+            "confidence_threshold": self.confidence_threshold,
+            "nms_threshold": self.nms_threshold,
+            "imgsz": self.yolo_imgsz,
+            "threads": self.threads,
+            "last_stats": self._last_stats,
             "error": self._load_error,
         }
 
     def detect(self, image, cv2, np) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
+        if self.backend != "yolo":
+            self._load_error = f"Unsupported object detector backend: {self.backend}. Use backend: yolo."
+            self.backend_name = "unsupported-backend"
+            return []
+        return self._detect_with_yolo(image, cv2, np)
 
-        if self.backend == "yolo":
-            return self._detect_with_yolo(image)
-
-        if self.backend == "mobilenet":
-            dnn_objects = self._detect_with_dnn(image, cv2, np)
-            if dnn_objects:
-                return dnn_objects
-
-        return self._detect_fallback_faces(image, cv2)
-    # COCO-80 class names (used by YOLOv11n trained on COCO dataset)
-    _COCO_NAMES = [
-        "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
-        "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
-        "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
-        "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
-        "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
-        "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
-        "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
-        "couch","potted plant","bed","dining table","toilet","tv","laptop","mouse",
-        "remote","keyboard","cell phone","microwave","oven","toaster","sink",
-        "refrigerator","book","clock","vase","scissors","teddy bear","hair drier",
-        "toothbrush",
-    ]
-
-    def _detect_with_yolo(self, image) -> list[dict[str, Any]]:
-        """YOLO inference via ONNX Runtime -- no PyTorch / ultralytics needed."""
-        import numpy as np  # type: ignore
+    def _load_yolo(self):
+        if self._yolo is not None:
+            return self._yolo
 
         try:
-            if self._yolo is None:
-                import onnxruntime as ort  # type: ignore
+            import onnxruntime as ort  # type: ignore
+        except ImportError as exc:
+            self._load_error = "onnxruntime is not installed. Run: pip install -U onnxruntime"
+            self.backend_name = "onnxruntime-missing"
+            raise RuntimeError(self._load_error) from exc
 
-                # Look for the model in several candidate locations.
-                model_file = self._find_yolo_model()
+        model_file = self._find_yolo_model()
+        if model_file is None:
+            self._load_error = (
+                f"YOLO model not found. Checked: {[str(c) for c in self._yolo_candidates()]}. "
+                "Run: python scripts/download_models.py --skip-llm --skip-stt --tts-engine kokoro --vision yolo"
+            )
+            self.backend_name = "yolo-missing"
+            raise FileNotFoundError(self._load_error)
 
-                if model_file is None:
-                    self._load_error = (
-                        f"YOLO model not found -- checked: {[str(c) for c in self._yolo_candidates()]}. "
-                        "Run: python scripts/download_models.py --vision yolo"
-                    )
-                    self.backend_name = "yolo-missing"
-                    return []
+        try:
+            # Suppress harmless Raspberry Pi DRM/GPU discovery warnings when only
+            # CPUExecutionProvider is available/desired.
+            ort.set_default_logger_severity(3)
+        except Exception:
+            pass
 
-                opts = ort.SessionOptions()
-                opts.inter_op_num_threads = 2
-                opts.intra_op_num_threads = 2
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                self._yolo = ort.InferenceSession(str(model_file), sess_options=opts)
-                self._yolo_input_name = self._yolo.get_inputs()[0].name
-                self._yolo_model_file = str(model_file)
-                self.backend_name = "onnxruntime-yolo"
-                self._load_error = None
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 3
+        opts.inter_op_num_threads = self.threads
+        opts.intra_op_num_threads = self.threads
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-        except Exception as exc:
-            self._load_error = f"YOLO ONNX load failed: {exc}"
-            self.backend_name = "yolo-error"
+        self._yolo = ort.InferenceSession(
+            str(model_file),
+            sess_options=opts,
+            providers=["CPUExecutionProvider"],
+        )
+        yolo_input = self._yolo.get_inputs()[0]
+        self._yolo_input_name = yolo_input.name
+        self._yolo_input_shape = list(yolo_input.shape)
+        self._yolo_model_file = str(model_file)
+        self.backend_name = "onnxruntime-yolo"
+        self._load_error = None
+        return self._yolo
+
+    def _input_size(self) -> int:
+        # Prefer a fixed model input if the ONNX file has one; otherwise use config.
+        try:
+            shape = self._yolo_input_shape or []
+            h = shape[2] if len(shape) >= 4 else None
+            w = shape[3] if len(shape) >= 4 else None
+            if isinstance(h, int) and isinstance(w, int) and h == w and h > 0:
+                return int(h)
+        except Exception:
+            pass
+        return int(self.yolo_imgsz)
+
+    def _detect_with_yolo(self, image, cv2, np) -> list[dict[str, Any]]:
+        started = time.perf_counter()
+        try:
+            session = self._load_yolo()
+        except Exception:
             return []
 
         try:
             orig_h, orig_w = image.shape[:2]
-            imgsz = self.yolo_imgsz
+            imgsz = self._input_size()
+            blob, scale, pad_x, pad_y = self._letterbox_blob(image, cv2, np, imgsz)
+            outputs = session.run(None, {self._yolo_input_name: blob})
+            raw = outputs[0]
+            preds = self._normalise_yolo_output(raw, np)
+            decoded = self._decode_yolo_predictions(preds, np)
 
-            # Letterbox resize (preserve aspect ratio, pad with grey 114).
-            scale = min(imgsz / orig_w, imgsz / orig_h)
-            new_w, new_h = int(orig_w * scale), int(orig_h * scale)
-            pad_x = (imgsz - new_w) // 2
-            pad_y = (imgsz - new_h) // 2
+            max_conf_before_filter = float(np.max(decoded["confidences"])) if len(decoded["confidences"]) else 0.0
+            keep = decoded["confidences"] >= self.confidence_threshold
+            confidences = decoded["confidences"][keep]
+            class_ids = decoded["class_ids"][keep]
+            x1s = decoded["x1s"][keep]
+            y1s = decoded["y1s"][keep]
+            x2s = decoded["x2s"][keep]
+            y2s = decoded["y2s"][keep]
 
-            import cv2  # type: ignore
-            resized = cv2.resize(image, (new_w, new_h))
-            canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
-            canvas[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = resized
-
-            # BGR -> RGB, HWC -> NCHW, normalize 0-1.
-            blob = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-            blob = np.expand_dims(blob.transpose(2, 0, 1), 0)  # [1, 3, H, W]
-
-            raw = self._yolo.run(None, {self._yolo_input_name: blob})[0]  # [1, 84, anchors]
-
-            # raw shape: [1, 84, N] -> transpose to [N, 84]
-            preds = raw[0].T  # [N, 84]
-
-            cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
-            class_scores = preds[:, 4:]               # [N, 80]
-            class_ids = np.argmax(class_scores, axis=1)
-            confidences = class_scores[np.arange(len(class_scores)), class_ids]
-
-            keep = confidences >= self.confidence_threshold
-            cx, cy, bw, bh = cx[keep], cy[keep], bw[keep], bh[keep]
-            confidences = confidences[keep]
-            class_ids = class_ids[keep]
-
-            if len(confidences) == 0:
-                return []
-
-            # Convert letterbox coords back to original image coords.
-            x1s = ((cx - bw / 2) - pad_x) / scale
-            y1s = ((cy - bh / 2) - pad_y) / scale
-            x2s = ((cx + bw / 2) - pad_x) / scale
-            y2s = ((cy + bh / 2) - pad_y) / scale
+            if not decoded["xyxy_in_original_image"]:
+                x1s = (x1s - pad_x) / scale
+                y1s = (y1s - pad_y) / scale
+                x2s = (x2s - pad_x) / scale
+                y2s = (y2s - pad_y) / scale
 
             x1s = np.clip(x1s, 0, orig_w).astype(int)
             y1s = np.clip(y1s, 0, orig_h).astype(int)
             x2s = np.clip(x2s, 0, orig_w).astype(int)
             y2s = np.clip(y2s, 0, orig_h).astype(int)
 
-            # cv2 NMS expects [x, y, w, h] and float lists.
-            boxes_xywh = [[int(x1s[i]), int(y1s[i]), int(x2s[i] - x1s[i]), int(y2s[i] - y1s[i])]
-                          for i in range(len(confidences))]
-            nms_idx = cv2.dnn.NMSBoxes(
-                boxes_xywh,
-                confidences.tolist(),
-                self.confidence_threshold,
-                float(self.cfg.get("vision.object_detection.nms_threshold", 0.45)),
-            )
-            if len(nms_idx) == 0:
-                return []
+            valid = (x2s > x1s) & (y2s > y1s)
+            confidences = confidences[valid]
+            class_ids = class_ids[valid]
+            x1s, y1s, x2s, y2s = x1s[valid], y1s[valid], x2s[valid], y2s[valid]
 
-            nms_idx = nms_idx.flatten()
-            objects = []
-            for i in nms_idx[: self.max_objects]:
-                cls_id = int(class_ids[i])
-                label = (
-                    self._COCO_NAMES[cls_id]
-                    if 0 <= cls_id < len(self._COCO_NAMES)
-                    else f"class_{cls_id}"
+            objects: list[dict[str, Any]] = []
+            if len(confidences):
+                boxes_xywh = [
+                    [int(x1s[i]), int(y1s[i]), int(x2s[i] - x1s[i]), int(y2s[i] - y1s[i])]
+                    for i in range(len(confidences))
+                ]
+                nms_idx = cv2.dnn.NMSBoxes(
+                    boxes_xywh,
+                    [float(v) for v in confidences],
+                    self.confidence_threshold,
+                    self.nms_threshold,
                 )
-                objects.append({
-                    "label": label,
-                    "confidence": round(float(confidences[i]), 3),
-                    "bbox": [int(x1s[i]), int(y1s[i]), int(x2s[i]), int(y2s[i])],
-                    "class_id": cls_id,
-                    "detector": "yolo-onnx",
-                })
+                nms_idx = np.array(nms_idx).reshape(-1) if len(nms_idx) else []
+
+                for i in list(nms_idx)[: self.max_objects]:
+                    cls_id = int(class_ids[int(i)])
+                    label = self._COCO_NAMES[cls_id] if 0 <= cls_id < len(self._COCO_NAMES) else f"class_{cls_id}"
+                    objects.append({
+                        "label": label,
+                        "confidence": round(float(confidences[int(i)]), 3),
+                        "bbox": [int(x1s[int(i)]), int(y1s[int(i)]), int(x2s[int(i)]), int(y2s[int(i)])],
+                        "class_id": cls_id,
+                        "detector": "yolo11n-onnx",
+                    })
 
             objects.sort(key=lambda o: float(o.get("confidence", 0.0)), reverse=True)
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self._last_stats = {
+                "raw_shape": list(raw.shape),
+                "preds_shape": list(preds.shape),
+                "max_confidence_before_filter": round(max_conf_before_filter, 4),
+                "candidates_above_threshold": int(len(confidences)),
+                "objects_returned": int(len(objects)),
+                "input_size": imgsz,
+                "elapsed_ms": round(elapsed_ms, 1),
+            }
+            self.backend_name = "onnxruntime-yolo"
+            self._load_error = None
+            if self.debug:
+                print(f"YOLO stats: {self._last_stats}", flush=True)
             return objects
 
         except Exception as exc:
             self._load_error = f"YOLO inference failed: {exc}"
-            return []
-    def _detect_with_dnn(self, image, cv2, np) -> list[dict[str, Any]]:
-        if not (self.model_path.exists() and self.config_path.exists()):
-            self._load_error = "object model files are missing; run: python scripts/download_models.py --skip-llm --skip-stt --skip-tts --vision mobilenet-ssd"
-            return []
-        try:
-            if self._net is None:
-                self._net = cv2.dnn.readNetFromCaffe(str(self.config_path), str(self.model_path))
-                self.backend_name = "opencv-dnn"
-            h, w = image.shape[:2]
-            blob = cv2.dnn.blobFromImage(image, 0.007843, (300, 300), (127.5, 127.5, 127.5), False, False)
-            self._net.setInput(blob)
-            detections = self._net.forward()
-        except Exception as exc:
-            self._load_error = str(exc)
-            self._net = None
+            self.backend_name = "yolo-error"
             return []
 
-        objects: list[dict[str, Any]] = []
-        try:
-            for i in range(detections.shape[2]):
-                confidence = float(detections[0, 0, i, 2])
-                if confidence < self.confidence_threshold:
-                    continue
-                class_id = int(detections[0, 0, i, 1])
-                label = VOC_CLASSES[class_id] if 0 <= class_id < len(VOC_CLASSES) else f"class_{class_id}"
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                start_x, start_y, end_x, end_y = box.astype("int")
-                start_x = max(0, min(int(start_x), w - 1))
-                start_y = max(0, min(int(start_y), h - 1))
-                end_x = max(0, min(int(end_x), w - 1))
-                end_y = max(0, min(int(end_y), h - 1))
-                objects.append({
-                    "label": label,
-                    "confidence": round(confidence, 3),
-                    "bbox": [start_x, start_y, end_x, end_y],
-                })
-        except Exception as exc:
-            self._load_error = f"dnn parse failed: {exc}"
-            return []
+    def _letterbox_blob(self, image, cv2, np, imgsz: int):
+        orig_h, orig_w = image.shape[:2]
+        scale = min(imgsz / max(orig_w, 1), imgsz / max(orig_h, 1))
+        new_w = max(1, int(round(orig_w * scale)))
+        new_h = max(1, int(round(orig_h * scale)))
+        pad_x = (imgsz - new_w) / 2.0
+        pad_y = (imgsz - new_h) / 2.0
 
-        objects.sort(key=lambda obj: float(obj.get("confidence", 0.0)), reverse=True)
-        return objects[: self.max_objects]
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
+        left = int(round(pad_x - 0.1))
+        top = int(round(pad_y - 0.1))
+        canvas[top:top + new_h, left:left + new_w] = resized
 
-    def _detect_fallback_faces(self, image, cv2) -> list[dict[str, Any]]:
-        try:
-            if not self._haar_loaded:
-                cascade_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-                self._face_cascade = cv2.CascadeClassifier(cascade_path)
-                self._haar_loaded = True
-                self.backend_name = "opencv-haar-fallback"
-            if self._face_cascade is None or self._face_cascade.empty():
-                return []
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            faces = self._face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(45, 45))
-        except Exception:
-            return []
+        # OpenCV camera frames are BGR. YOLO expects RGB float NCHW in 0..1.
+        blob = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.expand_dims(blob.transpose(2, 0, 1), axis=0)
+        return blob, scale, float(left), float(top)
 
-        objects = []
-        for (x, y, w, h) in list(faces)[: self.max_objects]:
-            objects.append({
-                "label": "face/person",
-                "confidence": 0.55,
-                "bbox": [int(x), int(y), int(x + w), int(y + h)],
-            })
-        return objects
+    def _normalise_yolo_output(self, raw, np):
+        preds = np.squeeze(raw)
+        if preds.ndim == 1:
+            preds = preds.reshape(1, -1)
+        if preds.ndim != 2:
+            raise ValueError(f"unexpected YOLO output shape: raw={getattr(raw, 'shape', None)}, squeezed={preds.shape}")
+
+        # Common Ultralytics export: [84, 8400] after squeeze. Some export paths
+        # produce [8400, 84]. NMS-enabled exports may be [6, N] or [N, 6].
+        if preds.shape[0] in (6, 84, 85) and preds.shape[1] > preds.shape[0]:
+            preds = preds.T
+        if preds.shape[1] not in (6, 84, 85):
+            raise ValueError(f"unsupported YOLO output shape: raw={getattr(raw, 'shape', None)}, squeezed={preds.shape}")
+        return preds
+
+    def _decode_yolo_predictions(self, preds, np) -> dict[str, Any]:
+        if preds.shape[1] == 6:
+            x1s, y1s, x2s, y2s = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+            confidences = preds[:, 4].astype(float)
+            class_ids = preds[:, 5].astype(int)
+            # If an export returns normalized xyxy, convert to configured input pixels.
+            if max(float(np.max(x2s)), float(np.max(y2s))) <= 1.5:
+                x1s = x1s * self._input_size()
+                y1s = y1s * self._input_size()
+                x2s = x2s * self._input_size()
+                y2s = y2s * self._input_size()
+            return {
+                "x1s": x1s, "y1s": y1s, "x2s": x2s, "y2s": y2s,
+                "confidences": confidences, "class_ids": class_ids,
+                "xyxy_in_original_image": False,
+            }
+
+        cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+        if preds.shape[1] == 84:
+            class_scores = preds[:, 4:]
+            class_ids = np.argmax(class_scores, axis=1)
+            confidences = class_scores[np.arange(len(class_scores)), class_ids]
+        else:  # [N, 85] = cx, cy, w, h, objectness, 80 class scores
+            objectness = preds[:, 4]
+            class_scores = preds[:, 5:]
+            class_ids = np.argmax(class_scores, axis=1)
+            class_conf = class_scores[np.arange(len(class_scores)), class_ids]
+            confidences = objectness * class_conf
+
+        return {
+            "x1s": cx - bw / 2.0,
+            "y1s": cy - bh / 2.0,
+            "x2s": cx + bw / 2.0,
+            "y2s": cy + bh / 2.0,
+            "confidences": confidences.astype(float),
+            "class_ids": class_ids.astype(int),
+            "xyxy_in_original_image": False,
+        }

@@ -8,7 +8,6 @@ import threading
 import uuid
 from typing import Any
 from voicepi.tts_kokoro import KokoroTTS
-from voicepi.tts_edge import EdgeTTS
 
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
@@ -22,7 +21,6 @@ from voicepi.memory import MemoryStore
 from voicepi.robot_controller import RobotController
 from voicepi.session import ConversationSession
 from voicepi.system_stats import SystemStatsMonitor
-from voicepi.tts_piper import PiperTTS
 from voicepi.vision import VisionObservation, VisionService
 
 
@@ -62,10 +60,9 @@ def create_app(cfg: Config) -> Flask:
 
     tts_engine_name = str(cfg.get("tts.engine", "piper")).strip().lower()
 
-    if tts_engine_name == "kokoro":
-        tts_engine = KokoroTTS(cfg)
-    else:
-        tts_engine = PiperTTS(cfg)
+    if tts_engine_name != "kokoro":
+        raise RuntimeError("This cleaned robot build supports tts.engine: kokoro only.")
+    tts_engine = KokoroTTS(cfg)
     robot_controller = RobotController(cfg)
     if robot_controller.enabled:
         logger.event("boot", "info", "robot controller enabled", base_url=robot_controller.base_url)
@@ -231,6 +228,15 @@ def create_app(cfg: Config) -> Flask:
         if not frame:
             return jsonify({"ok": False, "error": "no camera frame available"}), 503
         return Response(frame, mimetype="image/jpeg")
+
+    @app.route("/camera/analyze", methods=["GET", "POST"])
+    def camera_analyze():
+        try:
+            obs = vision_service.analyze_now(reason="manual-http")
+            return jsonify(obs.to_dict())
+        except Exception as exc:
+            logger.event("vision", "error", f"manual camera analysis failed: {exc}")
+            return jsonify({"ok": False, "summary": "manual camera analysis failed", "error": str(exc)}), 500
 
     @app.get("/camera/stream.mjpg")
     def camera_stream():

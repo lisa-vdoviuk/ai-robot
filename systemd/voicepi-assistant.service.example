@@ -1,14 +1,17 @@
 [Unit]
-Description=VoicePi local LLM voice assistant
+Description=VoicePi robot assistant
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/voicepi-llm-assistant-v2
+WorkingDirectory=/home/pi/ai-robot
 Environment=VOICEPI_CONFIG=config.yaml
-ExecStart=/home/pi/voicepi-llm-assistant-v2/.venv/bin/python /home/pi/voicepi-llm-assistant-v2/app.py --config config.yaml
+Environment=OMP_NUM_THREADS=2
+Environment=OPENBLAS_NUM_THREADS=2
+Environment=NUMEXPR_NUM_THREADS=2
+ExecStart=/home/pi/ai-robot/.venv/bin/python /home/pi/ai-robot/app.py --config config.yaml
 Restart=on-failure
 RestartSec=5
 

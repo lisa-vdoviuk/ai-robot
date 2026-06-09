@@ -50,31 +50,29 @@ class Config:
 
     def require_files(self) -> list[str]:
         missing: list[str] = []
-
         required_paths = ["stt.model_path"]
 
-        llm_engine = str(self.get("llm.engine", "llama_cpp")).strip().lower()
+        llm_engine = str(self.get("llm.engine", "groq")).strip().lower()
         if llm_engine in {"llama_cpp", "local", "llama"}:
             required_paths.append("llm.model_path")
 
-        tts_engine = str(self.get("tts.engine", "piper")).strip().lower()
-        if tts_engine in {"piper", "local"}:
-            required_paths.append("tts.model_path")
-        elif tts_engine == "kokoro":
-            required_paths.append("tts.kokoro.model_path")
-            required_paths.append("tts.kokoro.voices_path")
+        tts_engine = str(self.get("tts.engine", "kokoro")).strip().lower()
+        if tts_engine != "kokoro":
+            missing.append(f"tts.engine: unsupported value {tts_engine!r}; this build uses 'kokoro'")
+        else:
+            required_paths.extend(["tts.kokoro.model_path", "tts.kokoro.voices_path"])
+
+        vision_enabled = bool(self.get("vision.object_detection.enabled", True))
+        vision_backend = str(self.get("vision.object_detection.backend", "yolo")).strip().lower()
+        if vision_enabled:
+            if vision_backend != "yolo":
+                missing.append(f"vision.object_detection.backend: unsupported value {vision_backend!r}; use 'yolo'")
+            else:
+                required_paths.append("vision.object_detection.model_path")
 
         for dotted in required_paths:
             p = self.path(dotted)
             if not p.exists():
                 missing.append(f"{dotted}: {p}")
-
-        if tts_engine in {"piper", "local"}:
-            tts_config = self.get("tts.config_path")
-            if tts_config:
-                p = self.path("tts.config_path")
-                if not p.exists():
-                    missing.append(f"tts.config_path: {p}")
-        # edge-tts: no model files needed
 
         return missing

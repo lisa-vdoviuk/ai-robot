@@ -7,30 +7,21 @@ simple-websocket>=1.0.0
 PyYAML>=6.0.1
 requests>=2.31.0
 tqdm>=4.66.0
-numpy
+numpy>=1.24
 
-# SSL (self-signed cert for browser mic access)
+# SSL for LAN HTTPS microphone access
 pyOpenSSL>=24.0.0
 
 # STT
 vosk>=0.3.45
 
-# LLM (only needed for local llama_cpp engine; groq/openai engines skip this)
-# llama-cpp-python>=0.3.8    # install separately via install_pi.sh (needs CMake flags)
+# Optional local LLM support; Groq works with requests only.
+# llama-cpp-python>=0.3.8
 huggingface_hub>=0.23.0
 
-# TTS -- choose ONE engine in config.yaml: tts.engine = "kokoro" | "edge" | "piper"
-# kokoro-onnx: high quality, offline, ONNX Runtime (no PyTorch), works on ARM
-kokoro-onnx>=0.4.0
-# edge-tts: neural quality (best), free, internet required, no model files
-edge-tts>=6.1.9
-# piper-tts: kept for legacy; kokoro-onnx or edge-tts preferred
-piper-tts>=1.4.2
-
-# Audio encoding/IO
+# Offline TTS: Kokoro ONNX. No PyTorch required.
+kokoro-onnx>=0.5.0
 soundfile>=0.12.1
 
-# Vision / Camera
-# opencv-python is installed via apt (python3-opencv) to get ARM-optimized build.
-# onnxruntime for YOLO object detection (no PyTorch needed).
+# Vision: YOLO ONNX. Install python3-opencv via apt on Raspberry Pi.
 onnxruntime>=1.17.0
