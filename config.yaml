@@ -164,9 +164,9 @@ vision:
     config_path: "models/vision/deploy.prototxt"
 
     imgsz: 640        # inference size in pixels (416 is fast on Pi; use 640 for accuracy)
-    confidence_threshold: 0.30
+    confidence_threshold: 0.20
     nms_threshold: 0.45
-    max_objects: 8
+    max_objects: 10
 
 client:
   vad_threshold: 0.018
